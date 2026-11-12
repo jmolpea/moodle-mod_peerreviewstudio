@@ -1,0 +1,4 @@
+# Local tooling, never part of the plugin.
+.gstack/
+.claude/
+*.zip

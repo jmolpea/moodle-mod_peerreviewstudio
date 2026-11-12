@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB PATH="mod/peerreviewstudio/db" VERSION="2026070408" COMMENT="XMLDB file for mod_peerreviewstudio"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
+>
+  <TABLES>
+    <TABLE NAME="peerreviewstudio" COMMENT="Main table for Peer Review Studio activities">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="course" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="intro" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="introformat" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="submissiontype" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="file"/>
+        <FIELD NAME="reviewcountrequired" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="reviewsreceivedtarget" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="autoassignenabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="reviewpoolmode" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="any"/>
+        <FIELD NAME="avoidreciprocalreviews" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="reviewreminderdays" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="2"/>
+        <FIELD NAME="reviewreassigndays" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="4"/>
+        <FIELD NAME="grademaxsubmission" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="100"/>
+        <FIELD NAME="grademaxreview" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeopen" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeclose" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timereviewdue" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="workflowmode" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="scheduled"/>
+        <FIELD NAME="manualphase" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="submission"/>
+        <FIELD NAME="aireviewenabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="aigradeweight" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="30"/>
+        <FIELD NAME="aifallbackenabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="aipromptsubmission" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="aipromptreviewer" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="courseix" UNIQUE="false" FIELDS="course"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_submissions" COMMENT="Learner submissions">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="peerreviewstudioid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="30" NOTNULL="true" DEFAULT="submitted"/>
+        <FIELD NAME="onlinetext" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="onlinetextformat" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timesubmitted" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="submissiongrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="reviewgrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="finalgrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="teachergradeoverride" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="aigrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="aifeedback" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="aitimegraded" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeescalated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="peerreviewstudiofk" TYPE="foreign" FIELDS="peerreviewstudioid" REFTABLE="peerreviewstudio" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="activityuserix" UNIQUE="false" FIELDS="peerreviewstudioid, userid"/>
+        <INDEX NAME="statusix" UNIQUE="false" FIELDS="status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_assignments" COMMENT="Peer review assignments">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="peerreviewstudioid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="submissionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="reviewerid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="30" NOTNULL="true" DEFAULT="assigned"/>
+        <FIELD NAME="timeassigned" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timereminded" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timeopened" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecompleted" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="peerreviewstudiofk" TYPE="foreign" FIELDS="peerreviewstudioid" REFTABLE="peerreviewstudio" REFFIELDS="id"/>
+        <KEY NAME="submissionfk" TYPE="foreign" FIELDS="submissionid" REFTABLE="peerreviewstudio_submissions" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="reviewerix" UNIQUE="false" FIELDS="reviewerid"/>
+        <INDEX NAME="statusix" UNIQUE="false" FIELDS="status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_reviews" COMMENT="Completed or draft reviews">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="assignmentid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="submissionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="reviewerid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="draft"/>
+        <FIELD NAME="generalcomment" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="grade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="aireviewergrade" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="false"/>
+        <FIELD NAME="aireviewerfeedback" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="aitimegraded" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timesubmitted" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="assignmentfk" TYPE="foreign" FIELDS="assignmentid" REFTABLE="peerreviewstudio_assignments" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="submissionreviewerix" UNIQUE="false" FIELDS="submissionid, reviewerid"/>
+        <INDEX NAME="statusix" UNIQUE="false" FIELDS="status"/>
+      </INDEXES>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_rubrics" COMMENT="Rubric definitions">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="peerreviewstudioid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="peerreviewstudiofk" TYPE="foreign" FIELDS="peerreviewstudioid" REFTABLE="peerreviewstudio" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_r_criteria" COMMENT="Rubric criteria">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="rubricid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="label" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="description" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="weight" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="1.00000"/>
+        <FIELD NAME="sortorder" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="rubricfk" TYPE="foreign" FIELDS="rubricid" REFTABLE="peerreviewstudio_rubrics" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_r_levels" COMMENT="Rubric levels">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="criterionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="label" TYPE="char" LENGTH="255" NOTNULL="true"/>
+        <FIELD NAME="score" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0.00000"/>
+        <FIELD NAME="sortorder" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="criterionfk" TYPE="foreign" FIELDS="criterionid" REFTABLE="peerreviewstudio_r_criteria" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_r_answers" COMMENT="Review rubric answers">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="reviewid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="criterionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="levelid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="commenttext" TYPE="text" NOTNULL="false"/>
+        <FIELD NAME="score" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="0.00000"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="reviewfk" TYPE="foreign" FIELDS="reviewid" REFTABLE="peerreviewstudio_reviews" REFFIELDS="id"/>
+      </KEYS>
+    </TABLE>
+
+    <TABLE NAME="peerreviewstudio_queue" COMMENT="Assignment queue and repair tasks">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="peerreviewstudioid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="submissionid" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="queuetype" TYPE="char" LENGTH="30" NOTNULL="true" DEFAULT="awaiting_reviewer"/>
+        <FIELD NAME="status" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="pending"/>
+        <FIELD NAME="attempts" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="lastattemptat" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="peerreviewstudiofk" TYPE="foreign" FIELDS="peerreviewstudioid" REFTABLE="peerreviewstudio" REFFIELDS="id"/>
+        <KEY NAME="submissionfk" TYPE="foreign" FIELDS="submissionid" REFTABLE="peerreviewstudio_submissions" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="statusix" UNIQUE="false" FIELDS="status"/>
+        <INDEX NAME="activitystatusix" UNIQUE="false" FIELDS="peerreviewstudioid, status"/>
+        <INDEX NAME="submissionstatusix" UNIQUE="false" FIELDS="submissionid, status"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>

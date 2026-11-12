@@ -1,0 +1,539 @@
+.peerreviewstudio-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+.peerreviewstudio-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+
+.peerreviewstudio-hero,
+.peerreviewstudio-card {
+    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 18px;
+    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+}
+
+.peerreviewstudio-hero {
+    padding: 1.75rem;
+    display: flex;
+    justify-content: space-between;
+    gap: 1.25rem;
+    align-items: flex-start;
+    background:
+        radial-gradient(1200px 300px at 110% -20%, rgba(129, 140, 248, 0.12), transparent 60%),
+        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+}
+
+.peerreviewstudio-title {
+    margin: 0.5rem 0 0.25rem;
+    font-size: 1.6rem;
+    letter-spacing: -0.02em;
+}
+
+.peerreviewstudio-subtitle,
+.peerreviewstudio-muted,
+.peerreviewstudio-email {
+    color: #475569;
+}
+
+.peerreviewstudio-email {
+    font-size: 0.85rem;
+}
+
+.peerreviewstudio-hero-stats,
+.peerreviewstudio-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 0.75rem;
+}
+
+.peerreviewstudio-stat,
+.peerreviewstudio-metric {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 14px;
+    padding: 0.85rem 1rem;
+    transition: box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.peerreviewstudio-metric:hover {
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+
+.peerreviewstudio-metric strong {
+    display: block;
+    font-size: 1.45rem;
+    line-height: 1.2;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+}
+
+.peerreviewstudio-metric-body {
+    margin: 0;
+}
+
+.peerreviewstudio-metric span,
+.peerreviewstudio-stat-label {
+    font-size: 0.92rem;
+}
+
+.peerreviewstudio-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    background: #e0f2fe;
+    color: #075985;
+    border-radius: 999px;
+    padding: 0.3rem 0.7rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.peerreviewstudio-chip-phase {
+    background: #ede9fe;
+    color: #5b21b6;
+}
+
+.peerreviewstudio-chip-alert {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+.peerreviewstudio-chip-ai {
+    background: #f0f9ff;
+    color: #0c4a6e;
+    border: 1px solid #bae6fd;
+    margin-bottom: 0.6rem;
+}
+
+.peerreviewstudio-card-ai {
+    border-left: 4px solid #38bdf8;
+}
+
+.peerreviewstudio-queueform {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin: 0 0 1rem;
+}
+
+.peerreviewstudio-queueform-hint {
+    font-size: 0.85rem;
+}
+
+.peerreviewstudio-phasebar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.peerreviewstudio-phasebar-item {
+    padding: 0.55rem 0.9rem;
+    border-radius: 999px;
+    background: #f1f5f9;
+    color: #334155;
+    font-size: 0.9rem;
+    transition: background 0.15s ease;
+}
+
+.peerreviewstudio-phasebar-item.is-active {
+    background: #0f172a;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+}
+
+.peerreviewstudio-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
+    gap: 1.5rem;
+    align-items: start;
+}
+
+.peerreviewstudio-main,
+.peerreviewstudio-sidebar {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    min-width: 0;
+}
+
+.peerreviewstudio-card {
+    padding: 1.4rem;
+}
+
+.peerreviewstudio-card-title {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    font-size: 1.15rem;
+    letter-spacing: -0.01em;
+}
+
+.peerreviewstudio-kpi {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.peerreviewstudio-notice {
+    padding: 0.85rem 1rem;
+    border-radius: 12px;
+    background: #fff7ed;
+    color: #9a3412;
+    border: 1px solid #fdba74;
+}
+
+.peerreviewstudio-notice-success {
+    background: #ecfdf5;
+    color: #166534;
+    border-color: #86efac;
+}
+
+/* Submitted-state success banner. */
+.peerreviewstudio-success-banner {
+    display: flex;
+    align-items: center;
+    gap: 0.85rem;
+    padding: 0.95rem 1.1rem;
+    margin-bottom: 1rem;
+    border-radius: 14px;
+    background: #ecfdf5;
+    border: 1px solid #86efac;
+}
+
+.peerreviewstudio-success-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2rem;
+    height: 2rem;
+    flex-shrink: 0;
+    border-radius: 999px;
+    background: #16a34a;
+    color: #fff;
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.peerreviewstudio-success-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+}
+
+.peerreviewstudio-success-body strong {
+    color: #14532d;
+}
+
+/* Collapsed edit form after a submission exists. */
+.peerreviewstudio-editwrap {
+    margin-top: 1rem;
+    border: 1px dashed #cbd5e1;
+    border-radius: 14px;
+    padding: 0;
+    background: #fff;
+}
+
+.peerreviewstudio-editwrap[open] {
+    border-style: solid;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+}
+
+.peerreviewstudio-editwrap > * {
+    margin-left: 1rem;
+    margin-right: 1rem;
+}
+
+.peerreviewstudio-editwrap-summary {
+    cursor: pointer;
+    padding: 0.85rem 1rem;
+    margin: 0;
+    font-weight: 600;
+    color: #1d4ed8;
+    border-radius: 14px;
+    list-style-position: inside;
+    transition: background 0.15s ease;
+}
+
+.peerreviewstudio-editwrap-summary:hover {
+    background: #f1f5f9;
+}
+
+.peerreviewstudio-editwrap[open] .peerreviewstudio-editwrap-summary {
+    border-bottom: 1px solid #e2e8f0;
+    border-radius: 14px 14px 0 0;
+    margin-bottom: 0.85rem;
+}
+
+.peerreviewstudio-feedback {
+    border-top: 1px solid #e2e8f0;
+    padding-top: 1rem;
+    margin-top: 1rem;
+}
+
+.peerreviewstudio-feedback:first-of-type {
+    border-top: 0;
+    padding-top: 0;
+    margin-top: 0;
+}
+
+.peerreviewstudio-feedback-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 1rem;
+    align-items: center;
+    margin-bottom: 0.75rem;
+}
+
+.peerreviewstudio-rubric-list {
+    list-style: none;
+    margin: 0 0 1rem;
+    padding: 0;
+    display: grid;
+    gap: 0.65rem;
+}
+
+.peerreviewstudio-rubric-item {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.85rem;
+}
+
+.peerreviewstudio-rubric-line {
+    font-weight: 600;
+    color: #0f172a;
+}
+
+.peerreviewstudio-rubric-comment,
+.peerreviewstudio-feedback-comment,
+.peerreviewstudio-submission-preview {
+    margin-top: 0.4rem;
+    color: #334155;
+}
+
+.peerreviewstudio-submission-preview {
+    background: #fff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 0.85rem 1rem;
+}
+
+.peerreviewstudio-section-title {
+    margin: 1rem 0 0.6rem;
+    font-size: 1rem;
+}
+
+.peerreviewstudio-review-target {
+    margin: 1rem 0 1.25rem;
+    padding: 1rem;
+    border: 1px solid #dbeafe;
+    border-radius: 14px;
+    background: #f8fbff;
+}
+
+.peerreviewstudio-file-list {
+    margin: 0;
+    padding-left: 1.2rem;
+}
+
+.peerreviewstudio-file-item + .peerreviewstudio-file-item {
+    margin-top: 0.35rem;
+}
+
+.peerreviewstudio-file-item a {
+    color: #1d4ed8;
+    text-decoration: none;
+}
+
+.peerreviewstudio-file-item a:hover {
+    text-decoration: underline;
+}
+
+.peerreviewstudio-filters {
+    display: grid;
+    gap: 0.6rem;
+    margin: 1rem 0;
+}
+
+.peerreviewstudio-filters input[type="text"],
+.peerreviewstudio-filters select,
+.peerreviewstudio-table select {
+    width: 100%;
+    max-width: 100%;
+    padding: 0.55rem 0.7rem;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.peerreviewstudio-filters input[type="text"]:focus,
+.peerreviewstudio-filters select:focus,
+.peerreviewstudio-table select:focus,
+.peerreviewstudio-gradeform input[type="text"]:focus {
+    outline: none;
+    border-color: #6366f1;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
+}
+
+.peerreviewstudio-filters input[type="submit"],
+.peerreviewstudio-table input[type="submit"] {
+    border: 0;
+    border-radius: 10px;
+    background: #0f172a;
+    color: #fff;
+    padding: 0.6rem 0.9rem;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.peerreviewstudio-filters input[type="submit"]:hover,
+.peerreviewstudio-table input[type="submit"]:hover {
+    background: #1e293b;
+}
+
+.peerreviewstudio-filters input[type="submit"]:active,
+.peerreviewstudio-table input[type="submit"]:active {
+    transform: translateY(1px);
+}
+
+.peerreviewstudio-gradeform {
+    display: flex;
+    gap: 0.45rem;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
+}
+
+.peerreviewstudio-gradeform-wrap {
+    margin-top: 0.75rem;
+}
+
+.peerreviewstudio-matching-meta {
+    font-weight: 600;
+    color: #0f172a;
+    margin-bottom: 0.25rem;
+}
+
+.peerreviewstudio-gradeform input[type="text"] {
+    min-width: 120px;
+    padding: 0.5rem 0.65rem;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+}
+
+/* Tables: horizontal scroll on narrow viewports instead of layout breakage. */
+.peerreviewstudio-table-wrap {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    border-radius: 12px;
+}
+
+.peerreviewstudio-table {
+    width: 100%;
+    min-width: 720px;
+    border-collapse: separate;
+    border-spacing: 0;
+}
+
+.peerreviewstudio-table caption {
+    caption-side: top;
+    text-align: left;
+    font-weight: 600;
+    color: #334155;
+    padding: 0 0 0.75rem;
+}
+
+.peerreviewstudio-table th {
+    background: #f8fafc;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: #475569;
+}
+
+.peerreviewstudio-table td,
+.peerreviewstudio-table th {
+    vertical-align: top;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid #eef2f7;
+}
+
+.peerreviewstudio-table tbody tr:hover td {
+    background: #f8fafc;
+}
+
+/* Pagination. */
+.peerreviewstudio-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    margin-top: 1rem;
+    flex-wrap: wrap;
+}
+
+.peerreviewstudio-pagelink {
+    padding: 0.5rem 0.9rem;
+    border-radius: 10px;
+    border: 1px solid #cbd5e1;
+    background: #fff;
+    color: #0f172a;
+    font-weight: 600;
+    text-decoration: none;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.peerreviewstudio-pagelink:hover {
+    background: #f1f5f9;
+    border-color: #94a3b8;
+    text-decoration: none;
+}
+
+.peerreviewstudio-pageinfo {
+    color: #475569;
+    font-size: 0.92rem;
+    font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 960px) {
+    .peerreviewstudio-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .peerreviewstudio-hero {
+        flex-direction: column;
+    }
+
+    .peerreviewstudio-feedback-head {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .peerreviewstudio-metric,
+    .peerreviewstudio-phasebar-item,
+    .peerreviewstudio-editwrap-summary,
+    .peerreviewstudio-pagelink,
+    .peerreviewstudio-filters input[type="submit"],
+    .peerreviewstudio-table input[type="submit"] {
+        transition: none;
+    }
+}
