@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.12 (2026-11-12)
+
+Two defects found while running a full course as a test student.
+
+### Fixed
+- **Students and teachers could not see the activity at all.**
+  `mod/peerreviewstudio:view` declared
+  `clonepermissionsfrom => moodle/course:view`. When that key is present
+  Moodle copies the permissions of the named capability and ignores the
+  archetype defaults, and `moodle/course:view` is held by managers only.
+  The key is removed, so new installs get the archetype defaults
+  (student, teacher, editing teacher, manager). An upgrade step grants the
+  capability to the student, teacher and editing-teacher archetype roles
+  that have no permission set for it yet; roles an administrator already
+  configured are left alone.
+- **The activity name and description were shown twice** on the activity
+  page. Moodle 4.x renders both in the standard activity header, so
+  `view.php` no longer prints its own copy.
+
+### Known issues, not addressed in this release
+- When the AI answer cannot be parsed as `{"grade", "feedback"}` (for
+  example, because the activity prompt asks for a table), the fallback
+  review task fails and is retried without limit.
+- The "0 / 2 target" indicator does not change after the learner submits
+  both assigned reviews.
+
 ## 0.9.9 (2026-07-04)
 
 Security, privacy, and configurability pass over the AI second review.

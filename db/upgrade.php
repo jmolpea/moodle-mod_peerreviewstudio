@@ -263,5 +263,28 @@ function xmldb_peerreviewstudio_upgrade(int $oldversion): bool {
         upgrade_mod_savepoint(true, 2026070408, 'peerreviewstudio');
     }
 
+    if ($oldversion < 2026111200) {
+        // Up to 0.9.11 mod/peerreviewstudio:view cloned its permissions from
+        // moodle/course:view, which only managers hold, so the archetype defaults
+        // were never applied and students and teachers could not open the activity.
+        // Default permissions are only set at install time: grant the missing ones
+        // here, leaving alone any role an administrator has already configured.
+        $systemcontext = context_system::instance();
+        foreach (['student', 'teacher', 'editingteacher'] as $archetype) {
+            foreach (get_archetype_roles($archetype) as $role) {
+                $configured = $DB->record_exists('role_capabilities', [
+                    'roleid' => $role->id,
+                    'capability' => 'mod/peerreviewstudio:view',
+                    'contextid' => $systemcontext->id,
+                ]);
+                if (!$configured) {
+                    assign_capability('mod/peerreviewstudio:view', CAP_ALLOW, $role->id, $systemcontext->id);
+                }
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026111200, 'peerreviewstudio');
+    }
+
     return true;
 }

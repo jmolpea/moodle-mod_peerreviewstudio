@@ -256,10 +256,9 @@ if ($submission) {
 }
 
 echo $OUTPUT->header();
-echo $OUTPUT->heading(format_string($peerreviewstudio->name));
-
+// The activity header (Moodle 4+) already prints the name and the description:
+// printing them again here showed the whole brief twice to students.
 echo html_writer::start_div('peerreviewstudio-shell');
-echo format_module_intro('peerreviewstudio', $peerreviewstudio, $cm->id);
 
 if (!empty($peerreviewstudio->aireviewenabled) && \mod_peerreviewstudio\local\ai\client::is_configured()
         && ($cansubmit || has_capability('mod/peerreviewstudio:review', $context))) {

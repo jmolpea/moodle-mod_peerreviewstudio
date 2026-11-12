@@ -25,7 +25,7 @@
 defined('MOODLE_INTERNAL') || die();
 
 $plugin->component = 'mod_peerreviewstudio';
-$plugin->version = 2026070408;
+$plugin->version = 2026111200;
 $plugin->requires = 2024100700;
 $plugin->maturity = MATURITY_BETA;
-$plugin->release = '0.9.11';
+$plugin->release = '0.9.12';

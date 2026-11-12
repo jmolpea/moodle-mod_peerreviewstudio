@@ -44,7 +44,10 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'moodle/course:view',
+        // No clonepermissionsfrom here on purpose. When it is set, Moodle copies the
+        // permissions of that capability and ignores the archetypes above, and
+        // moodle/course:view is held by managers only: students and teachers were
+        // left without access to the activity.
     ],
     'mod/peerreviewstudio:submit' => [
         'captype' => 'write',
