@@ -22,6 +22,7 @@ use core_privacy\local\metadata\collection;
 use core_privacy\local\request\approved_contextlist;
 use core_privacy\local\request\approved_userlist;
 use core_privacy\local\request\contextlist;
+use core_privacy\local\request\transform;
 use core_privacy\local\request\userlist;
 use core_privacy\local\request\writer;
 
@@ -34,9 +35,8 @@ use core_privacy\local\request\writer;
  */
 class provider implements
     \core_privacy\local\metadata\provider,
-    \core_privacy\local\request\plugin\provider,
-    \core_privacy\local\request\core_userlist_provider {
-
+    \core_privacy\local\request\core_userlist_provider,
+    \core_privacy\local\request\plugin\provider {
     /**
      * Describe the personal data stored by the plugin.
      *
@@ -60,6 +60,7 @@ class provider implements
             'reviewerid' => 'privacy:metadata:peerreviewstudio_assignments:reviewerid',
             'status' => 'privacy:metadata:peerreviewstudio_assignments:status',
             'timeassigned' => 'privacy:metadata:peerreviewstudio_assignments:timeassigned',
+            'timeopened' => 'privacy:metadata:peerreviewstudio_assignments:timeopened',
             'timereminded' => 'privacy:metadata:peerreviewstudio_assignments:timereminded',
             'timecompleted' => 'privacy:metadata:peerreviewstudio_assignments:timecompleted',
         ], 'privacy:metadata:peerreviewstudio_assignments');
@@ -77,15 +78,17 @@ class provider implements
             'score' => 'privacy:metadata:peerreviewstudio_r_answers:score',
         ], 'privacy:metadata:peerreviewstudio_r_answers');
         $collection->add_subsystem_link('core_files', [], 'privacy:metadata:core_files');
+        $collection->add_subsystem_link('core_message', [], 'privacy:metadata:core_message');
         // Optional AI second review: when a teacher enables it for an
-        // activity, the content below is sent to the external AI provider
-        // configured site-wide. No user identities (names, emails, ids)
-        // are ever included in that payload.
-        $collection->add_external_location_link('aiprovider', [
-            'activitycontext' => 'privacy:metadata:aiprovider:activitycontext',
-            'submissioncontent' => 'privacy:metadata:aiprovider:submissioncontent',
-            'reviewcontent' => 'privacy:metadata:aiprovider:reviewcontent',
-        ], 'privacy:metadata:aiprovider');
+        // activity, the content below is passed to the Moodle AI subsystem,
+        // which sends it to the site's AI provider and keeps a record of the
+        // request for the user who wrote the content. The plugin never adds
+        // user identities (names, emails) to that content.
+        $collection->add_subsystem_link('core_ai', [
+            'activitycontext' => 'privacy:metadata:core_ai:activitycontext',
+            'submissioncontent' => 'privacy:metadata:core_ai:submissioncontent',
+            'reviewcontent' => 'privacy:metadata:core_ai:reviewcontent',
+        ], 'privacy:metadata:core_ai');
         return $collection;
     }
 
@@ -97,22 +100,32 @@ class provider implements
      */
     public static function get_contexts_for_userid(int $userid): contextlist {
         $contextlist = new contextlist();
-        $sql = "SELECT DISTINCT ctx.id
-                  FROM {context} ctx
-                  JOIN {course_modules} cm ON cm.id = ctx.instanceid AND ctx.contextlevel = :contextlevel
-                  JOIN {modules} m ON m.id = cm.module AND m.name = :modname
-                  JOIN {peerreviewstudio} prs ON prs.id = cm.instance
-             LEFT JOIN {peerreviewstudio_submissions} s ON s.peerreviewstudioid = prs.id AND s.userid = :userid1
-             LEFT JOIN {peerreviewstudio_assignments} a ON a.peerreviewstudioid = prs.id AND a.reviewerid = :userid2
-             LEFT JOIN {peerreviewstudio_reviews} r ON r.assignmentid = a.id AND r.reviewerid = :userid3
-                 WHERE s.id IS NOT NULL OR a.id IS NOT NULL OR r.id IS NOT NULL";
-        $contextlist->add_from_sql($sql, [
+        $params = [
             'contextlevel' => CONTEXT_MODULE,
             'modname' => 'peerreviewstudio',
-            'userid1' => $userid,
-            'userid2' => $userid,
-            'userid3' => $userid,
-        ]);
+            'userid' => $userid,
+        ];
+        $from = "FROM {context} ctx
+                 JOIN {course_modules} cm ON cm.id = ctx.instanceid AND ctx.contextlevel = :contextlevel
+                 JOIN {modules} m ON m.id = cm.module AND m.name = :modname";
+
+        // Submissions the user owns.
+        $contextlist->add_from_sql(
+            "SELECT ctx.id
+               $from
+               JOIN {peerreviewstudio_submissions} s ON s.peerreviewstudioid = cm.instance
+              WHERE s.userid = :userid",
+            $params
+        );
+        // Reviews assigned to, or written by, the user.
+        $contextlist->add_from_sql(
+            "SELECT ctx.id
+               $from
+               JOIN {peerreviewstudio_assignments} a ON a.peerreviewstudioid = cm.instance
+              WHERE a.reviewerid = :userid",
+            $params
+        );
+
         return $contextlist;
     }
 
@@ -123,8 +136,7 @@ class provider implements
      * @return void
      */
     public static function get_users_in_context(userlist $userlist): void {
-        $context = $userlist->get_context();
-        $activityid = self::context_to_activityid($context);
+        $activityid = self::context_to_activityid($userlist->get_context());
         if ($activityid === null) {
             return;
         }
@@ -140,14 +152,6 @@ class provider implements
             "SELECT reviewerid FROM {peerreviewstudio_assignments} WHERE peerreviewstudioid = :activityid AND reviewerid > 0",
             $params
         );
-        $userlist->add_from_sql(
-            'reviewerid',
-            "SELECT r.reviewerid
-               FROM {peerreviewstudio_reviews} r
-               JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
-              WHERE a.peerreviewstudioid = :activityid AND r.reviewerid > 0",
-            $params
-        );
     }
 
     /**
@@ -159,77 +163,46 @@ class provider implements
     public static function export_user_data(approved_contextlist $contextlist): void {
         global $DB;
 
-        $userid = $contextlist->get_userid();
+        $userid = (int)$contextlist->get_user()->id;
         foreach ($contextlist->get_contexts() as $context) {
-            if (!$context instanceof context_module) {
+            $activityid = self::context_to_activityid($context);
+            if ($activityid === null) {
                 continue;
             }
-            $cm = get_coursemodule_from_id('peerreviewstudio', $context->instanceid);
-            if (!$cm) {
-                continue;
-            }
-            $activity = $DB->get_record('peerreviewstudio', ['id' => $cm->instance], '*', MUST_EXIST);
-            $submissions = array_values($DB->get_records('peerreviewstudio_submissions', [
-                'peerreviewstudioid' => $activity->id,
+
+            $data = \core_privacy\local\request\helper::get_context_data($context, $contextlist->get_user());
+
+            // The user's own submission and the feedback it received. The
+            // identity of the reviewers is never part of the author's export.
+            $submissions = $DB->get_records('peerreviewstudio_submissions', [
+                'peerreviewstudioid' => $activityid,
                 'userid' => $userid,
-            ]));
-            $assignments = array_values($DB->get_records('peerreviewstudio_assignments', [
-                'peerreviewstudioid' => $activity->id,
-                'reviewerid' => $userid,
-            ]));
-            $reviews = [];
-            $answersbyreview = [];
-            foreach ($assignments as $assignment) {
-                $review = $DB->get_record('peerreviewstudio_reviews', [
-                    'assignmentid' => $assignment->id,
-                    'reviewerid' => $userid,
-                ]);
-                if ($review) {
-                    $reviews[] = $review;
-                    $answersbyreview[$review->id] = array_values(
-                        $DB->get_records('peerreviewstudio_r_answers', ['reviewid' => $review->id])
-                    );
-                }
-            }
-
-            $receivedfeedback = [];
-            $receivedanswers = [];
-            if ($submissions) {
-                $submissionids = array_map(static fn($submission) => (int)$submission->id, $submissions);
-                [$submissionidsql, $submissionparams] = $DB->get_in_or_equal($submissionids, SQL_PARAMS_NAMED);
-                $receivedsql = "SELECT r.*, a.submissionid AS receivedsubmissionid
-                                  FROM {peerreviewstudio_reviews} r
-                                  JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
-                                 WHERE a.submissionid $submissionidsql
-                                   AND r.status = 'submitted'
-                              ORDER BY r.timesubmitted ASC, r.id ASC";
-                $receivedfeedback = array_values($DB->get_records_sql($receivedsql, $submissionparams));
-                foreach ($receivedfeedback as $review) {
-                    // Never expose reviewer identities inside the author-facing export payload.
-                    unset($review->reviewerid);
-                    $receivedanswers[$review->id] = array_values(
-                        $DB->get_records('peerreviewstudio_r_answers', ['reviewid' => $review->id])
-                    );
-                }
-            }
-
-            writer::with_context($context)->export_data([], (object) [
-                'activityname' => format_string($activity->name, true, ['context' => $context]),
-                'submissionownership' => (object) [
-                    'submissions' => $submissions,
-                ],
-                'reviewwork' => (object) [
-                    'assignments' => $assignments,
-                    'reviews' => $reviews,
-                    'rubricanswers' => $answersbyreview,
-                ],
-                'feedbackreceived' => (object) [
-                    'reviews' => $receivedfeedback,
-                    'rubricanswers' => $receivedanswers,
-                ],
             ]);
-
+            $data->submissions = [];
             foreach ($submissions as $submission) {
+                $received = $DB->get_records_sql(
+                    "SELECT r.*
+                       FROM {peerreviewstudio_reviews} r
+                       JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
+                      WHERE a.submissionid = :submissionid
+                        AND r.status = 'submitted'
+                   ORDER BY r.timesubmitted ASC, r.id ASC",
+                    ['submissionid' => $submission->id]
+                );
+                $data->submissions[] = (object) [
+                    'status' => $submission->status,
+                    'onlinetext' => format_text((string)$submission->onlinetext, (int)$submission->onlinetextformat, [
+                        'context' => $context,
+                    ]),
+                    'timesubmitted' => transform::datetime((int)$submission->timesubmitted),
+                    'submissiongrade' => $submission->submissiongrade,
+                    'reviewgrade' => $submission->reviewgrade,
+                    'finalgrade' => $submission->finalgrade,
+                    'teachergradeoverride' => $submission->teachergradeoverride,
+                    'aigrade' => $submission->aigrade,
+                    'aifeedback' => $submission->aifeedback,
+                    'feedbackreceived' => array_values(array_map([self::class, 'export_review'], $received)),
+                ];
                 writer::with_context($context)->export_area_files(
                     [],
                     'mod_peerreviewstudio',
@@ -237,7 +210,66 @@ class provider implements
                     (int)$submission->id
                 );
             }
+
+            // The reviewing work the user did for others.
+            $assignments = $DB->get_records('peerreviewstudio_assignments', [
+                'peerreviewstudioid' => $activityid,
+                'reviewerid' => $userid,
+            ], 'timeassigned ASC, id ASC');
+            $data->reviewsassigned = [];
+            foreach ($assignments as $assignment) {
+                $review = $DB->get_record('peerreviewstudio_reviews', ['assignmentid' => $assignment->id]);
+                $data->reviewsassigned[] = (object) [
+                    'status' => $assignment->status,
+                    'timeassigned' => transform::datetime((int)$assignment->timeassigned),
+                    'timeopened' => $assignment->timeopened ? transform::datetime((int)$assignment->timeopened) : null,
+                    'timereminded' => $assignment->timereminded ? transform::datetime((int)$assignment->timereminded) : null,
+                    'timecompleted' => $assignment->timecompleted ? transform::datetime((int)$assignment->timecompleted) : null,
+                    'review' => $review ? self::export_review($review, true) : null,
+                ];
+            }
+
+            writer::with_context($context)->export_data([], $data);
         }
+    }
+
+    /**
+     * Shape one review for export.
+     *
+     * @param \stdClass $review Review record.
+     * @param bool $own Whether the exporting user wrote the review (adds the AI assessment of it).
+     * @return \stdClass
+     */
+    protected static function export_review(\stdClass $review, bool $own = false): \stdClass {
+        global $DB;
+
+        $answers = $DB->get_records_sql(
+            "SELECT ans.id, c.label AS criterionlabel, l.label AS levellabel, ans.score, ans.commenttext
+               FROM {peerreviewstudio_r_answers} ans
+               JOIN {peerreviewstudio_r_criteria} c ON c.id = ans.criterionid
+               JOIN {peerreviewstudio_r_levels} l ON l.id = ans.levelid
+              WHERE ans.reviewid = :reviewid
+           ORDER BY c.sortorder ASC, c.id ASC",
+            ['reviewid' => $review->id]
+        );
+
+        $export = (object) [
+            'grade' => $review->grade,
+            'generalcomment' => $review->generalcomment,
+            'timesubmitted' => transform::datetime((int)$review->timesubmitted),
+            'rubricanswers' => array_values(array_map(static fn($answer) => (object) [
+                'criterion' => $answer->criterionlabel,
+                'level' => $answer->levellabel,
+                'score' => $answer->score,
+                'comment' => $answer->commenttext,
+            ], $answers)),
+        ];
+        if ($own) {
+            $export->aireviewergrade = $review->aireviewergrade;
+            $export->aireviewerfeedback = $review->aireviewerfeedback;
+        }
+
+        return $export;
     }
 
     /**
@@ -247,12 +279,15 @@ class provider implements
      * @return void
      */
     public static function delete_data_for_all_users_in_context(context $context): void {
+        global $CFG;
+        require_once($CFG->dirroot . '/mod/peerreviewstudio/locallib.php');
+
         $activityid = self::context_to_activityid($context);
         if ($activityid === null) {
             return;
         }
 
-        self::purge_activity_user_data($activityid, $context);
+        \peerreviewstudio_delete_activity_user_data($activityid, $context);
     }
 
     /**
@@ -267,7 +302,7 @@ class provider implements
             if ($activityid === null) {
                 continue;
             }
-            self::delete_user_data_in_activity($activityid, $context, $contextlist->get_userid());
+            self::delete_user_data_in_activity($activityid, $context, (int)$contextlist->get_user()->id);
         }
     }
 
@@ -284,12 +319,17 @@ class provider implements
             return;
         }
         foreach ($userlist->get_userids() as $userid) {
-            self::delete_user_data_in_activity($activityid, $context, $userid);
+            self::delete_user_data_in_activity($activityid, $context, (int)$userid);
         }
     }
 
     /**
      * Delete or anonymise one user's data in one activity.
+     *
+     * The user's own work is erased. What the user wrote about other
+     * people's work, and what others wrote about the user's work, is
+     * stripped of identity and free text but the rows are kept, so the
+     * grades of the other participants do not change.
      *
      * @param int $activityid Activity id.
      * @param context $context Module context.
@@ -297,152 +337,86 @@ class provider implements
      * @return void
      */
     protected static function delete_user_data_in_activity(int $activityid, context $context, int $userid): void {
-        self::anonymise_submission_owner_data($activityid, $context, $userid);
-        self::anonymise_reviewer_data($activityid, $userid);
-    }
+        global $CFG, $DB;
+        require_once($CFG->dirroot . '/mod/peerreviewstudio/locallib.php');
 
-    /**
-     * Purge all user-generated data for one activity context.
-     *
-     * @param int $activityid Activity id.
-     * @param context $context Module context.
-     * @return void
-     */
-    protected static function purge_activity_user_data(int $activityid, context $context): void {
-        global $DB;
-
-        $submissions = $DB->get_records('peerreviewstudio_submissions', ['peerreviewstudioid' => $activityid], '', 'id');
-        foreach ($submissions as $submission) {
-            self::delete_submission_tree((int)$submission->id, $context);
+        $activity = $DB->get_record('peerreviewstudio', ['id' => $activityid]);
+        if (!$activity || $userid <= 0) {
+            return;
         }
+        $now = time();
 
-        $assignmentids = $DB->get_fieldset_select(
-            'peerreviewstudio_assignments',
-            'id',
-            'peerreviewstudioid = :activityid',
-            ['activityid' => $activityid]
-        );
-        if ($assignmentids) {
-            [$insql, $params] = $DB->get_in_or_equal($assignmentids, SQL_PARAMS_NAMED);
-            $reviewids = $DB->get_fieldset_select('peerreviewstudio_reviews', 'id', 'assignmentid ' . $insql, $params);
-            if ($reviewids) {
-                [$reviewinsql, $reviewparams] = $DB->get_in_or_equal($reviewids, SQL_PARAMS_NAMED);
-                $DB->delete_records_select('peerreviewstudio_r_answers', 'reviewid ' . $reviewinsql, $reviewparams);
-            }
-            $DB->delete_records_select('peerreviewstudio_reviews', 'assignmentid ' . $insql, $params);
-        }
-
-        $DB->delete_records('peerreviewstudio_assignments', ['peerreviewstudioid' => $activityid]);
-        $DB->delete_records('peerreviewstudio_queue', ['peerreviewstudioid' => $activityid]);
-    }
-
-    /**
-     * Delete a submission and its dependent operational tree, including files.
-     *
-     * @param int $submissionid Submission id.
-     * @param context $context Module context.
-     * @return void
-     */
-    protected static function delete_submission_tree(int $submissionid, context $context): void {
-        global $DB;
-
-        $assignments = $DB->get_records('peerreviewstudio_assignments', ['submissionid' => $submissionid], '', 'id');
-        foreach ($assignments as $assignment) {
-            $reviews = $DB->get_records('peerreviewstudio_reviews', ['assignmentid' => $assignment->id], '', 'id');
-            foreach ($reviews as $review) {
-                $DB->delete_records('peerreviewstudio_r_answers', ['reviewid' => $review->id]);
-            }
-            $DB->delete_records('peerreviewstudio_reviews', ['assignmentid' => $assignment->id]);
-        }
-        $DB->delete_records('peerreviewstudio_assignments', ['submissionid' => $submissionid]);
-        $DB->delete_records('peerreviewstudio_queue', ['submissionid' => $submissionid]);
-        $DB->delete_records('peerreviewstudio_submissions', ['id' => $submissionid]);
-
-        get_file_storage()->delete_area_files($context->id, 'mod_peerreviewstudio', 'submission_files', $submissionid);
-    }
-
-    /**
-     * Anonymise submission-owner data while preserving review history records.
-     *
-     * @param int $activityid Activity id.
-     * @param context $context Module context.
-     * @param int $userid User id.
-     * @return void
-     */
-    protected static function anonymise_submission_owner_data(int $activityid, context $context, int $userid): void {
-        global $DB;
-
+        // 1. The user as author: erase the submission content and files, and
+        // stop anybody from being asked to review it.
         $submissions = $DB->get_records('peerreviewstudio_submissions', [
             'peerreviewstudioid' => $activityid,
             'userid' => $userid,
         ]);
-
         foreach ($submissions as $submission) {
-            $submission->userid = 0;
-            $submission->onlinetext = '';
-            $submission->onlinetextformat = FORMAT_HTML;
-            $submission->submissiongrade = null;
-            $submission->reviewgrade = null;
-            $submission->finalgrade = null;
-            $submission->teachergradeoverride = null;
-            $submission->aigrade = null;
-            $submission->aifeedback = '';
-            $submission->timemodified = time();
-            $DB->update_record('peerreviewstudio_submissions', $submission);
-
+            $DB->update_record('peerreviewstudio_submissions', (object) [
+                'id' => $submission->id,
+                'userid' => 0,
+                'onlinetext' => '',
+                'onlinetextformat' => FORMAT_HTML,
+                'submissiongrade' => null,
+                'reviewgrade' => null,
+                'finalgrade' => null,
+                'teachergradeoverride' => null,
+                'aigrade' => null,
+                'aifeedback' => '',
+                'timemodified' => $now,
+            ]);
             get_file_storage()->delete_area_files($context->id, 'mod_peerreviewstudio', 'submission_files', (int)$submission->id);
-
-            foreach ($DB->get_records('peerreviewstudio_queue', ['submissionid' => $submission->id]) as $queueitem) {
-                $queueitem->status = 'failed';
-                $queueitem->timemodified = time();
-                $DB->update_record('peerreviewstudio_queue', $queueitem);
-            }
+            $DB->set_field_select(
+                'peerreviewstudio_assignments',
+                'status',
+                'cancelled',
+                "submissionid = :submissionid AND status = 'assigned'",
+                ['submissionid' => $submission->id]
+            );
+            \peerreviewstudio_close_queue_entries((int)$submission->id, 'failed');
         }
-    }
 
-    /**
-     * Anonymise reviewer-linked data while preserving activity integrity.
-     *
-     * @param int $activityid Activity id.
-     * @param int|null $userid Specific user or null for all reviewers.
-     * @return void
-     */
-    protected static function anonymise_reviewer_data(int $activityid, ?int $userid): void {
-        global $DB;
-
-        $params = ['activityid' => $activityid];
-        $sql = "SELECT a.id
-                  FROM {peerreviewstudio_assignments} a
-                 WHERE a.peerreviewstudioid = :activityid";
-        if ($userid !== null) {
-            $sql .= " AND a.reviewerid = :userid";
-            $params['userid'] = $userid;
-        }
-        $assignments = $DB->get_records_sql($sql, $params);
+        // 2. The user as reviewer: strip identity and free text from the
+        // reviews, and hand the reviews still pending back to the matching.
+        $assignments = $DB->get_records('peerreviewstudio_assignments', [
+            'peerreviewstudioid' => $activityid,
+            'reviewerid' => $userid,
+        ]);
         foreach ($assignments as $assignment) {
-            $reviews = $DB->get_records('peerreviewstudio_reviews', ['assignmentid' => $assignment->id], '', 'id');
-            foreach ($reviews as $review) {
-                foreach ($DB->get_records('peerreviewstudio_r_answers', ['reviewid' => $review->id]) as $answer) {
-                    $answer->commenttext = '';
-                    $DB->update_record('peerreviewstudio_r_answers', $answer);
-                }
-                $reviewrecord = $DB->get_record('peerreviewstudio_reviews', ['id' => $review->id], '*', MUST_EXIST);
-                $reviewrecord->reviewerid = 0;
-                $reviewrecord->generalcomment = '';
-                $reviewrecord->aireviewergrade = null;
-                $reviewrecord->aireviewerfeedback = '';
-                $reviewrecord->timemodified = time();
-                $DB->update_record('peerreviewstudio_reviews', $reviewrecord);
+            $reviewids = $DB->get_fieldset_select(
+                'peerreviewstudio_reviews',
+                'id',
+                'assignmentid = :assignmentid',
+                ['assignmentid' => $assignment->id]
+            );
+            foreach ($reviewids as $reviewid) {
+                $DB->set_field('peerreviewstudio_r_answers', 'commenttext', '', ['reviewid' => $reviewid]);
+                $DB->update_record('peerreviewstudio_reviews', (object) [
+                    'id' => $reviewid,
+                    'reviewerid' => 0,
+                    'generalcomment' => '',
+                    'aireviewergrade' => null,
+                    'aireviewerfeedback' => '',
+                    'timemodified' => $now,
+                ]);
             }
 
-            if ($userid !== null) {
-                $assignmentrecord = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-                $assignmentrecord->reviewerid = 0;
-                if ((string)$assignmentrecord->status === 'assigned') {
-                    $assignmentrecord->status = 'cancelled';
+            $wasopen = (string)$assignment->status === 'assigned';
+            $DB->update_record('peerreviewstudio_assignments', (object) [
+                'id' => $assignment->id,
+                'reviewerid' => 0,
+                'status' => $wasopen ? 'cancelled' : $assignment->status,
+                'timemodified' => $now,
+            ]);
+            if ($wasopen) {
+                if (
+                    !empty($activity->autoassignenabled)
+                        && \peerreviewstudio_needed_assignments($activity, (int)$assignment->submissionid) > 0
+                ) {
+                    \peerreviewstudio_queue_submission($activity, (int)$assignment->submissionid);
                 }
-                $assignmentrecord->timemodified = time();
-                $DB->update_record('peerreviewstudio_assignments', $assignmentrecord);
+                \peerreviewstudio_update_submission_status($activity, (int)$assignment->submissionid);
             }
         }
     }
@@ -454,7 +428,7 @@ class provider implements
      * @return int|null
      */
     protected static function context_to_activityid(context $context): ?int {
-        if ($context->contextlevel !== CONTEXT_MODULE) {
+        if (!$context instanceof context_module) {
             return null;
         }
         $cm = get_coursemodule_from_id('peerreviewstudio', $context->instanceid);

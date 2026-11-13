@@ -38,8 +38,8 @@ class process_assignment_queue_task extends \core\task\scheduled_task {
     }
 
     /**
-     * Process pending queue entries and review follow-ups for every
-     * activity that has open work.
+     * Run the reviewer matching, the review follow-ups, and the scheduled
+     * release of feedback for every activity that has open work.
      *
      * @return void
      */
@@ -47,28 +47,50 @@ class process_assignment_queue_task extends \core\task\scheduled_task {
         global $CFG, $DB;
         require_once($CFG->dirroot . '/mod/peerreviewstudio/locallib.php');
 
-        // Activities with pending queue entries need assignment retries;
-        // activities with open assignments need the follow-up cycle
-        // (reminders, expiry/reassignment, escalation) as well.
+        // Activities with pending queue entries need matching; activities
+        // with open assignments need the follow-up cycle (notifications,
+        // reminders, expiry and reassignment, escalation); scheduled
+        // activities whose review deadline passed need their feedback
+        // released once.
         $activityids = $DB->get_fieldset_sql(
-            "SELECT DISTINCT peerreviewstudioid
-               FROM {peerreviewstudio_queue}
-              WHERE status = 'pending'
+            "SELECT q.peerreviewstudioid
+               FROM {peerreviewstudio_queue} q
+              WHERE q.status = 'pending'
               UNION
-             SELECT DISTINCT peerreviewstudioid
-               FROM {peerreviewstudio_assignments}
-              WHERE status = 'assigned'"
+             SELECT a.peerreviewstudioid
+               FROM {peerreviewstudio_assignments} a
+              WHERE a.status = 'assigned'
+              UNION
+             SELECT p.id
+               FROM {peerreviewstudio} p
+              WHERE p.workflowmode = 'scheduled'
+                AND p.timereviewdue > 0
+                AND p.timereviewdue < :now
+                AND p.timegradesreleased = 0",
+            ['now' => time()]
         );
 
         foreach ($activityids as $activityid) {
             $activity = $DB->get_record('peerreviewstudio', ['id' => $activityid]);
-            if (!$activity) {
+            // An activity being deleted may have lost its course module already.
+            if (!$activity || !get_coursemodule_from_instance('peerreviewstudio', $activity->id, $activity->course)) {
                 continue;
             }
-            if (!empty($activity->autoassignenabled)) {
-                \peerreviewstudio_process_assignment_queue($activity);
+
+            try {
+                if (!empty($activity->autoassignenabled)) {
+                    \peerreviewstudio_process_assignment_queue($activity);
+                }
+                \peerreviewstudio_process_review_followups($activity);
+
+                if (\peerreviewstudio_review_window_over($activity) && (int)$activity->timegradesreleased === 0) {
+                    \peerreviewstudio_release_feedback($activity);
+                    $DB->set_field('peerreviewstudio', 'timegradesreleased', time(), ['id' => $activity->id]);
+                }
+            } catch (\Throwable $e) {
+                // One broken activity must not stop the others.
+                mtrace('Peer Review Studio activity ' . $activity->id . ' failed: ' . $e->getMessage());
             }
-            \peerreviewstudio_process_review_followups($activity);
         }
     }
 }

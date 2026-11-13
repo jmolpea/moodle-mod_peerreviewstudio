@@ -45,7 +45,7 @@ class submission_form extends \moodleform {
                 'submissiontext_editor',
                 get_string('submissiontext', 'mod_peerreviewstudio'),
                 ['rows' => 12],
-                ['maxfiles' => 0, 'context' => $customdata['context']]
+                ['maxfiles' => 0, 'noclean' => false, 'context' => $customdata['context']]
             );
             $mform->setType('submissiontext_editor', PARAM_RAW);
             if ($submissiontype === 'onlinetext') {
@@ -58,7 +58,6 @@ class submission_form extends \moodleform {
                 'subdirs' => 0,
                 'maxfiles' => PEERREVIEWSTUDIO_MAXFILES,
                 'maxbytes' => $customdata['maxbytes'] ?? 0,
-                'accepted_types' => '*',
             ];
             $mform->addElement(
                 'filemanager',
@@ -72,9 +71,6 @@ class submission_form extends \moodleform {
             }
             $mform->addHelpButton('submissionfiles_filemanager', 'submissionfiles', 'mod_peerreviewstudio');
         }
-
-        $mform->addElement('hidden', 'id', $customdata['cmid']);
-        $mform->setType('id', PARAM_INT);
 
         $submitlabel = !empty($customdata['editing'])
             ? get_string('updatemywork', 'mod_peerreviewstudio')

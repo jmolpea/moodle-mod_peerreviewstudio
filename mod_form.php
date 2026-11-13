@@ -14,10 +14,20 @@
 // You should have received a copy of the GNU General Public License
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
+/**
+ * Activity settings form for mod_peerreviewstudio.
+ *
+ * @package     mod_peerreviewstudio
+ * @copyright   2026 Julio Molpeceres
+ * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ */
+
 defined('MOODLE_INTERNAL') || die();
 
 require_once($CFG->dirroot . '/course/moodleform_mod.php');
 require_once(__DIR__ . '/locallib.php');
+
+use mod_peerreviewstudio\local\ai\client;
 
 /**
  * Activity form for Peer Review Studio.
@@ -34,13 +44,6 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
      */
     public function definition(): void {
         $mform = $this->_form;
-        $rubricdefaults = peerreviewstudio_rubric_definition_to_form_defaults(peerreviewstudio_default_rubric_definition());
-
-        if (!empty($this->current->instance)) {
-            $rubricdefaults = peerreviewstudio_rubric_definition_to_form_defaults(
-                peerreviewstudio_get_activity_rubric((int)$this->current->instance)
-            );
-        }
 
         $mform->addElement('header', 'generalhdr', get_string('general', 'form'));
         $mform->addElement('text', 'name', get_string('peerreviewstudioname', 'mod_peerreviewstudio'), ['size' => '64']);
@@ -50,51 +53,34 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
 
         $this->standard_intro_elements();
 
+        $this->add_workflow_elements();
+        $this->add_grading_elements();
+        $this->add_ai_elements();
+        $this->add_rubric_elements();
+
+        $this->standard_coursemodule_elements();
+        $this->add_action_buttons();
+    }
+
+    /**
+     * Add the submission, matching, follow-up, and workflow settings.
+     *
+     * @return void
+     */
+    protected function add_workflow_elements(): void {
+        $mform = $this->_form;
+
         $mform->addElement('header', 'workflowhdr', get_string('workflowsettings', 'mod_peerreviewstudio'));
+        $mform->setExpanded('workflowhdr');
+
         $mform->addElement(
             'select',
             'submissiontype',
             get_string('submissiontype', 'mod_peerreviewstudio'),
-            peerreviewstudio_submission_type_options(),
+            peerreviewstudio_submission_type_options()
         );
         $mform->setDefault('submissiontype', 'file');
         $mform->addHelpButton('submissiontype', 'submissiontype', 'mod_peerreviewstudio');
-
-        $mform->addElement('text', 'reviewcountrequired', get_string('reviewcountrequired', 'mod_peerreviewstudio'));
-        $mform->setType('reviewcountrequired', PARAM_INT);
-        $mform->setDefault('reviewcountrequired', 1);
-        $mform->addHelpButton('reviewcountrequired', 'reviewcountrequired', 'mod_peerreviewstudio');
-
-        $mform->addElement('text', 'reviewsreceivedtarget', get_string('reviewsreceivedtarget', 'mod_peerreviewstudio'));
-        $mform->setType('reviewsreceivedtarget', PARAM_INT);
-        $mform->setDefault('reviewsreceivedtarget', 1);
-        $mform->addHelpButton('reviewsreceivedtarget', 'reviewsreceivedtarget', 'mod_peerreviewstudio');
-
-        $mform->addElement('advcheckbox', 'autoassignenabled', get_string('autoassignenabled', 'mod_peerreviewstudio'));
-        $mform->setDefault('autoassignenabled', 1);
-        $mform->addHelpButton('autoassignenabled', 'autoassignenabled', 'mod_peerreviewstudio');
-
-        $mform->addElement('select', 'reviewpoolmode', get_string('reviewpoolmode', 'mod_peerreviewstudio'), [
-            'any' => get_string('reviewpoolmode_any', 'mod_peerreviewstudio'),
-            'samegroup' => get_string('reviewpoolmode_samegroup', 'mod_peerreviewstudio'),
-            'differentgroup' => get_string('reviewpoolmode_differentgroup', 'mod_peerreviewstudio'),
-        ]);
-        $mform->setDefault('reviewpoolmode', 'any');
-        $mform->addHelpButton('reviewpoolmode', 'reviewpoolmode', 'mod_peerreviewstudio');
-
-        $mform->addElement('advcheckbox', 'avoidreciprocalreviews', get_string('avoidreciprocalreviews', 'mod_peerreviewstudio'));
-        $mform->setDefault('avoidreciprocalreviews', 1);
-        $mform->addHelpButton('avoidreciprocalreviews', 'avoidreciprocalreviews', 'mod_peerreviewstudio');
-
-        $mform->addElement('text', 'reviewreminderdays', get_string('reviewreminderdays', 'mod_peerreviewstudio'));
-        $mform->setType('reviewreminderdays', PARAM_INT);
-        $mform->setDefault('reviewreminderdays', 2);
-        $mform->addHelpButton('reviewreminderdays', 'reviewreminderdays', 'mod_peerreviewstudio');
-
-        $mform->addElement('text', 'reviewreassigndays', get_string('reviewreassigndays', 'mod_peerreviewstudio'));
-        $mform->setType('reviewreassigndays', PARAM_INT);
-        $mform->setDefault('reviewreassigndays', 4);
-        $mform->addHelpButton('reviewreassigndays', 'reviewreassigndays', 'mod_peerreviewstudio');
 
         $mform->addElement(
             'select',
@@ -115,43 +101,105 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
         $mform->addHelpButton('manualphase', 'manualphase', 'mod_peerreviewstudio');
         $mform->hideIf('manualphase', 'workflowmode', 'neq', 'manual');
 
-        $mform->addElement('date_time_selector', 'timeopen', get_string('timeopen', 'mod_peerreviewstudio'), ['optional' => true]);
-        $mform->addHelpButton('timeopen', 'timeopen', 'mod_peerreviewstudio');
-        $mform->hideIf('timeopen', 'workflowmode', 'eq', 'manual');
-        $mform->hideIf('timeopen', 'workflowmode', 'eq', 'open');
+        foreach (['timeopen', 'timeclose', 'timereviewdue'] as $datefield) {
+            $mform->addElement(
+                'date_time_selector',
+                $datefield,
+                get_string($datefield, 'mod_peerreviewstudio'),
+                ['optional' => true]
+            );
+            $mform->addHelpButton($datefield, $datefield, 'mod_peerreviewstudio');
+            $mform->hideIf($datefield, 'workflowmode', 'neq', 'scheduled');
+        }
+
+        $mform->addElement('text', 'reviewcountrequired', get_string('reviewcountrequired', 'mod_peerreviewstudio'), ['size' => 4]);
+        $mform->setType('reviewcountrequired', PARAM_INT);
+        $mform->setDefault('reviewcountrequired', 2);
+        $mform->addHelpButton('reviewcountrequired', 'reviewcountrequired', 'mod_peerreviewstudio');
 
         $mform->addElement(
-            'date_time_selector', 'timeclose', get_string('timeclose', 'mod_peerreviewstudio'), ['optional' => true]
+            'text',
+            'reviewsreceivedtarget',
+            get_string('reviewsreceivedtarget', 'mod_peerreviewstudio'),
+            ['size' => 4]
         );
-        $mform->addHelpButton('timeclose', 'timeclose', 'mod_peerreviewstudio');
-        $mform->hideIf('timeclose', 'workflowmode', 'eq', 'manual');
-        $mform->hideIf('timeclose', 'workflowmode', 'eq', 'open');
+        $mform->setType('reviewsreceivedtarget', PARAM_INT);
+        $mform->setDefault('reviewsreceivedtarget', 2);
+        $mform->addHelpButton('reviewsreceivedtarget', 'reviewsreceivedtarget', 'mod_peerreviewstudio');
+
+        $mform->addElement('advcheckbox', 'autoassignenabled', get_string('autoassignenabled', 'mod_peerreviewstudio'));
+        $mform->setDefault('autoassignenabled', 1);
+        $mform->addHelpButton('autoassignenabled', 'autoassignenabled', 'mod_peerreviewstudio');
 
         $mform->addElement(
-            'date_time_selector', 'timereviewdue', get_string('timereviewdue', 'mod_peerreviewstudio'), ['optional' => true]
+            'select',
+            'reviewpoolmode',
+            get_string('reviewpoolmode', 'mod_peerreviewstudio'),
+            peerreviewstudio_review_pool_options()
         );
-        $mform->addHelpButton('timereviewdue', 'timereviewdue', 'mod_peerreviewstudio');
-        $mform->hideIf('timereviewdue', 'workflowmode', 'eq', 'open');
-        $mform->hideIf('timereviewdue', 'workflowmode', 'eq', 'manual');
+        $mform->setDefault('reviewpoolmode', 'any');
+        $mform->addHelpButton('reviewpoolmode', 'reviewpoolmode', 'mod_peerreviewstudio');
+
+        $mform->addElement('advcheckbox', 'avoidreciprocalreviews', get_string('avoidreciprocalreviews', 'mod_peerreviewstudio'));
+        $mform->setDefault('avoidreciprocalreviews', 0);
+        $mform->addHelpButton('avoidreciprocalreviews', 'avoidreciprocalreviews', 'mod_peerreviewstudio');
+
+        $mform->addElement('text', 'reviewreminderdays', get_string('reviewreminderdays', 'mod_peerreviewstudio'), ['size' => 4]);
+        $mform->setType('reviewreminderdays', PARAM_INT);
+        $mform->setDefault('reviewreminderdays', 2);
+        $mform->addHelpButton('reviewreminderdays', 'reviewreminderdays', 'mod_peerreviewstudio');
+
+        $mform->addElement('text', 'reviewreassigndays', get_string('reviewreassigndays', 'mod_peerreviewstudio'), ['size' => 4]);
+        $mform->setType('reviewreassigndays', PARAM_INT);
+        $mform->setDefault('reviewreassigndays', 4);
+        $mform->addHelpButton('reviewreassigndays', 'reviewreassigndays', 'mod_peerreviewstudio');
+    }
+
+    /**
+     * Add the grading settings.
+     *
+     * @return void
+     */
+    protected function add_grading_elements(): void {
+        global $COURSE;
+
+        $mform = $this->_form;
 
         $mform->addElement('header', 'gradinghdr', get_string('gradingsettings', 'mod_peerreviewstudio'));
-        $mform->addElement('text', 'grademaxsubmission', get_string('grademaxsubmission', 'mod_peerreviewstudio'));
-        $mform->setType('grademaxsubmission', PARAM_FLOAT);
+
+        $mform->addElement('float', 'grademaxsubmission', get_string('grademaxsubmission', 'mod_peerreviewstudio'));
         $mform->setDefault('grademaxsubmission', 100);
         $mform->addHelpButton('grademaxsubmission', 'grademaxsubmission', 'mod_peerreviewstudio');
 
-        $mform->addElement('text', 'grademaxreview', get_string('grademaxreview', 'mod_peerreviewstudio'));
-        $mform->setType('grademaxreview', PARAM_FLOAT);
+        $mform->addElement('float', 'grademaxreview', get_string('grademaxreview', 'mod_peerreviewstudio'));
         $mform->setDefault('grademaxreview', 0);
         $mform->addHelpButton('grademaxreview', 'grademaxreview', 'mod_peerreviewstudio');
 
+        // Core stores these two on the grade item of the activity.
+        $mform->addElement(
+            'select',
+            'gradecat',
+            get_string('gradecategoryonmodform', 'grades'),
+            grade_get_categories_menu($COURSE->id)
+        );
+        $mform->addHelpButton('gradecat', 'gradecategoryonmodform', 'grades');
+
+        $mform->addElement('float', 'gradepass', get_string('gradepass', 'grades'));
+        $mform->addHelpButton('gradepass', 'gradepass', 'grades');
+        $mform->setDefault('gradepass', '');
+    }
+
+    /**
+     * Add the optional AI review settings.
+     *
+     * @return void
+     */
+    protected function add_ai_elements(): void {
+        $mform = $this->_form;
+
         $mform->addElement('header', 'aihdr', get_string('aisettings', 'mod_peerreviewstudio'));
-        if (\mod_peerreviewstudio\local\ai\client::is_configured()) {
-            $mform->addElement('static', 'aistatus', '', get_string('aiconfiguredstatus', 'mod_peerreviewstudio',
-                \mod_peerreviewstudio\local\ai\client::model()));
-        } else {
-            $mform->addElement('static', 'aistatus', '', get_string('ainotconfigured', 'mod_peerreviewstudio'));
-        }
+        $mform->addElement('static', 'aistatus', '', get_string($this->ai_status_key(), 'mod_peerreviewstudio'));
+
         $mform->addElement('advcheckbox', 'aireviewenabled', get_string('aireviewenabled', 'mod_peerreviewstudio'));
         $mform->setDefault('aireviewenabled', 0);
         $mform->addHelpButton('aireviewenabled', 'aireviewenabled', 'mod_peerreviewstudio');
@@ -159,43 +207,57 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
         $mform->addElement('advcheckbox', 'aifallbackenabled', get_string('aifallbackenabled', 'mod_peerreviewstudio'));
         $mform->setDefault('aifallbackenabled', 0);
         $mform->addHelpButton('aifallbackenabled', 'aifallbackenabled', 'mod_peerreviewstudio');
-        $mform->hideIf('aifallbackenabled', 'aireviewenabled', 'eq', 0);
+        $mform->hideIf('aifallbackenabled', 'aireviewenabled', 'notchecked');
 
-        $mform->addElement('text', 'aigradeweight', get_string('aigradeweight', 'mod_peerreviewstudio'));
-        $mform->setType('aigradeweight', PARAM_FLOAT);
+        $mform->addElement('float', 'aigradeweight', get_string('aigradeweight', 'mod_peerreviewstudio'));
         $mform->setDefault('aigradeweight', 30);
         $mform->addHelpButton('aigradeweight', 'aigradeweight', 'mod_peerreviewstudio');
-        $mform->hideIf('aigradeweight', 'aireviewenabled', 'eq', 0);
+        $mform->hideIf('aigradeweight', 'aireviewenabled', 'notchecked');
 
-        $mform->addElement(
-            'textarea',
-            'aipromptsubmission',
-            get_string('aipromptsubmission', 'mod_peerreviewstudio'),
-            ['rows' => 5, 'cols' => 80]
-        );
-        $mform->setType('aipromptsubmission', PARAM_TEXT);
-        $mform->setDefault('aipromptsubmission', get_string('aipromptsubmission_default', 'mod_peerreviewstudio'));
-        $mform->addHelpButton('aipromptsubmission', 'aipromptsubmission', 'mod_peerreviewstudio');
-        $mform->hideIf('aipromptsubmission', 'aireviewenabled', 'eq', 0);
+        foreach (['aipromptsubmission', 'aipromptreviewer'] as $promptfield) {
+            $mform->addElement(
+                'textarea',
+                $promptfield,
+                get_string($promptfield, 'mod_peerreviewstudio'),
+                ['rows' => 5, 'cols' => 80]
+            );
+            $mform->setType($promptfield, PARAM_TEXT);
+            $mform->setDefault($promptfield, get_string($promptfield . '_default', 'mod_peerreviewstudio'));
+            $mform->addHelpButton($promptfield, $promptfield, 'mod_peerreviewstudio');
+            $mform->hideIf($promptfield, 'aireviewenabled', 'notchecked');
+        }
+    }
 
-        $mform->addElement(
-            'textarea',
-            'aipromptreviewer',
-            get_string('aipromptreviewer', 'mod_peerreviewstudio'),
-            ['rows' => 5, 'cols' => 80]
-        );
-        $mform->setType('aipromptreviewer', PARAM_TEXT);
-        $mform->setDefault('aipromptreviewer', get_string('aipromptreviewer_default', 'mod_peerreviewstudio'));
-        $mform->addHelpButton('aipromptreviewer', 'aipromptreviewer', 'mod_peerreviewstudio');
-        $mform->hideIf('aipromptreviewer', 'aireviewenabled', 'eq', 0);
+    /**
+     * Language string that describes whether AI review can be used in this course.
+     *
+     * @return string String key: available, turned off for the course, or no provider.
+     */
+    protected function ai_status_key(): string {
+        $client = client::instance();
+        if (!$client->is_allowed_in_course((int)$this->get_course()->id)) {
+            return 'aidisabledincourse';
+        }
+
+        return $client->is_available() ? 'aiavailablestatus' : 'ainotconfigured';
+    }
+
+    /**
+     * Add the rubric editor: up to 5 criteria with up to 4 levels each.
+     *
+     * @return void
+     */
+    protected function add_rubric_elements(): void {
+        $mform = $this->_form;
+
+        $definition = peerreviewstudio_default_rubric_definition();
+        if (!empty($this->current->instance)) {
+            $definition = peerreviewstudio_get_activity_rubric((int)$this->current->instance);
+        }
+        $rubricdefaults = peerreviewstudio_rubric_definition_to_form_defaults($definition);
 
         $mform->addElement('header', 'rubrichdr', get_string('rubricsettings', 'mod_peerreviewstudio'));
-        $mform->addElement(
-            'static',
-            'rubricpreview',
-            get_string('rubricpreview', 'mod_peerreviewstudio'),
-            nl2br(s(peerreviewstudio_default_rubric_preview()))
-        );
+        $mform->addElement('static', 'rubricintro', '', get_string('rubricintro', 'mod_peerreviewstudio'));
 
         for ($criterionslot = 1; $criterionslot <= 5; $criterionslot++) {
             $criterionkey = 'rubriccriterionlabel_' . $criterionslot;
@@ -207,10 +269,11 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
                 'rubriccriterionhdr_' . $criterionslot,
                 get_string('rubriccriterionheader', 'mod_peerreviewstudio', $criterionslot)
             );
-            $mform->setExpanded('rubriccriterionhdr_' . $criterionslot, $criterionslot <= 3);
+            $mform->setExpanded('rubriccriterionhdr_' . $criterionslot, isset($rubricdefaults[$criterionkey]));
 
-            $mform->addElement('text', $criterionkey, get_string('rubriccriterionlabel', 'mod_peerreviewstudio'));
+            $mform->addElement('text', $criterionkey, get_string('rubriccriterionlabel', 'mod_peerreviewstudio'), ['size' => 64]);
             $mform->setType($criterionkey, PARAM_TEXT);
+            $mform->addRule($criterionkey, get_string('maximumchars', '', 255), 'maxlength', 255, 'client');
             $mform->setDefault($criterionkey, $rubricdefaults[$criterionkey] ?? '');
 
             $mform->addElement(
@@ -222,8 +285,7 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
             $mform->setType($descriptionkey, PARAM_TEXT);
             $mform->setDefault($descriptionkey, $rubricdefaults[$descriptionkey] ?? '');
 
-            $mform->addElement('text', $weightkey, get_string('rubriccriterionweight', 'mod_peerreviewstudio'));
-            $mform->setType($weightkey, PARAM_FLOAT);
+            $mform->addElement('float', $weightkey, get_string('rubriccriterionweight', 'mod_peerreviewstudio'));
             $mform->setDefault($weightkey, $rubricdefaults[$weightkey] ?? 1);
 
             for ($levelslot = 1; $levelslot <= 4; $levelslot++) {
@@ -231,18 +293,69 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
                 $scorekey = 'rubriclevelscore_' . $criterionslot . '_' . $levelslot;
                 $levelname = (object)['criterion' => $criterionslot, 'level' => $levelslot];
 
-                $mform->addElement('text', $levelkey, get_string('rubriclevellabel', 'mod_peerreviewstudio', $levelname));
+                $mform->addElement(
+                    'text',
+                    $levelkey,
+                    get_string('rubriclevellabel', 'mod_peerreviewstudio', $levelname),
+                    ['size' => 48]
+                );
                 $mform->setType($levelkey, PARAM_TEXT);
+                $mform->addRule($levelkey, get_string('maximumchars', '', 255), 'maxlength', 255, 'client');
                 $mform->setDefault($levelkey, $rubricdefaults[$levelkey] ?? '');
 
-                $mform->addElement('text', $scorekey, get_string('rubriclevelscore', 'mod_peerreviewstudio', $levelname));
-                $mform->setType($scorekey, PARAM_FLOAT);
+                $mform->addElement('float', $scorekey, get_string('rubriclevelscore', 'mod_peerreviewstudio', $levelname));
                 $mform->setDefault($scorekey, $rubricdefaults[$scorekey] ?? $levelslot);
             }
         }
+    }
 
-        $this->standard_coursemodule_elements();
-        $this->add_action_buttons();
+    /**
+     * Add the custom completion rules.
+     *
+     * @return string[] Names of the elements added.
+     */
+    public function add_completion_rules(): array {
+        $mform = $this->_form;
+        $suffix = $this->get_suffix();
+
+        $submit = 'completionsubmit' . $suffix;
+        $mform->addElement('checkbox', $submit, '', get_string('completionsubmit', 'mod_peerreviewstudio'));
+
+        $reviews = 'completionreviews' . $suffix;
+        $mform->addElement('checkbox', $reviews, '', get_string('completionreviews', 'mod_peerreviewstudio'));
+
+        return [$submit, $reviews];
+    }
+
+    /**
+     * Whether at least one custom completion rule is enabled.
+     *
+     * @param array $data Submitted form data.
+     * @return bool
+     */
+    public function completion_rule_enabled($data): bool {
+        $suffix = $this->get_suffix();
+
+        return !empty($data['completionsubmit' . $suffix]) || !empty($data['completionreviews' . $suffix]);
+    }
+
+    /**
+     * Store unticked completion rules as disabled.
+     *
+     * @param stdClass $data Submitted form data.
+     * @return void
+     */
+    public function data_postprocessing($data): void {
+        parent::data_postprocessing($data);
+
+        if (!empty($data->completionunlocked)) {
+            $suffix = $this->get_suffix();
+            foreach (['completionsubmit', 'completionreviews'] as $rule) {
+                if (empty($data->{$rule . $suffix})) {
+                    $data->{$rule . $suffix} = 0;
+                }
+            }
+        }
     }
 
     /**
@@ -263,6 +376,13 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
                 $defaultvalues[$promptfield] = get_string($promptfield . '_default', 'mod_peerreviewstudio');
             }
         }
+
+        // Stored decimals come padded from the database (100.00000).
+        foreach (['grademaxsubmission', 'grademaxreview', 'aigradeweight'] as $numberfield) {
+            if (isset($defaultvalues[$numberfield])) {
+                $defaultvalues[$numberfield] = (float)$defaultvalues[$numberfield];
+            }
+        }
     }
 
     /**
@@ -275,11 +395,10 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
     public function validation($data, $files): array {
         $errors = parent::validation($data, $files);
 
-        if (isset($data['reviewcountrequired']) && (int)$data['reviewcountrequired'] < 1) {
+        if ((int)($data['reviewcountrequired'] ?? 0) < 1) {
             $errors['reviewcountrequired'] = get_string('reviewcountrequiredmin', 'mod_peerreviewstudio');
         }
-
-        if (isset($data['reviewsreceivedtarget']) && (int)$data['reviewsreceivedtarget'] < 1) {
+        if ((int)($data['reviewsreceivedtarget'] ?? 0) < 1) {
             $errors['reviewsreceivedtarget'] = get_string('reviewsreceivedtargetmin', 'mod_peerreviewstudio');
         }
 
@@ -295,26 +414,27 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
             $errors['reviewreassigndays'] = get_string('reassignafterreminder', 'mod_peerreviewstudio');
         }
 
-        if (isset($data['grademaxsubmission']) && (float)$data['grademaxsubmission'] < 0) {
+        $submissionmax = (float)($data['grademaxsubmission'] ?? 0);
+        $reviewmax = (float)($data['grademaxreview'] ?? 0);
+        if ($submissionmax < 0) {
             $errors['grademaxsubmission'] = get_string('gradecannotbenegative', 'mod_peerreviewstudio');
         }
-
-        if (isset($data['grademaxreview']) && (float)$data['grademaxreview'] < 0) {
+        if ($reviewmax < 0) {
             $errors['grademaxreview'] = get_string('gradecannotbenegative', 'mod_peerreviewstudio');
+        }
+        if (empty($errors['gradepass']) && (float)($data['gradepass'] ?? 0) > $submissionmax + $reviewmax) {
+            $errors['gradepass'] = get_string('gradepassgreaterthangrade', 'grades', $submissionmax + $reviewmax);
         }
 
         if (!empty($data['aireviewenabled'])) {
-            if (!\mod_peerreviewstudio\local\ai\client::is_configured()) {
-                $errors['aireviewenabled'] = get_string('ainotconfigured', 'mod_peerreviewstudio');
+            $aistatus = $this->ai_status_key();
+            if ($aistatus !== 'aiavailablestatus') {
+                $errors['aireviewenabled'] = get_string($aistatus, 'mod_peerreviewstudio');
             }
             $weight = (float)($data['aigradeweight'] ?? 0);
             if ($weight < 0 || $weight > 100) {
                 $errors['aigradeweight'] = get_string('aigradeweightrange', 'mod_peerreviewstudio');
             }
-        }
-
-        if (!empty($data['timeopen']) && !empty($data['timeclose']) && (int)$data['timeclose'] < (int)$data['timeopen']) {
-            $errors['timeclose'] = get_string('timecloseafteropen', 'mod_peerreviewstudio');
         }
 
         if (($data['workflowmode'] ?? 'scheduled') === 'scheduled') {
@@ -323,33 +443,51 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
             // due date feedback is never released to authors.
             if (empty($data['timeclose'])) {
                 $errors['timeclose'] = get_string('scheduledrequiresclose', 'mod_peerreviewstudio');
+            } else if (!empty($data['timeopen']) && (int)$data['timeclose'] <= (int)$data['timeopen']) {
+                $errors['timeclose'] = get_string('timecloseafteropen', 'mod_peerreviewstudio');
             }
             if (empty($data['timereviewdue'])) {
                 $errors['timereviewdue'] = get_string('scheduledrequiresreviewdue', 'mod_peerreviewstudio');
-            }
-            if (!empty($data['timeclose']) && !empty($data['timereviewdue'])
-                    && (int)$data['timereviewdue'] < (int)$data['timeclose']) {
+            } else if (!empty($data['timeclose']) && (int)$data['timereviewdue'] <= (int)$data['timeclose']) {
                 $errors['timereviewdue'] = get_string('timereviewdueafterclose', 'mod_peerreviewstudio');
             }
         }
 
+        return $errors + $this->validate_rubric($data);
+    }
+
+    /**
+     * Validate the rubric part of the form.
+     *
+     * @param array $data Submitted form data.
+     * @return array Errors keyed by form field.
+     */
+    protected function validate_rubric(array $data): array {
+        $errors = [];
+
         $rubricdefinition = peerreviewstudio_extract_rubric_definition_from_form($data);
         if (!$rubricdefinition) {
             $errors['rubriccriterionlabel_1'] = get_string('rubricmusthavecriterion', 'mod_peerreviewstudio');
+            return $errors;
         }
 
         foreach ($rubricdefinition as $criterion) {
+            $field = 'rubriccriterionlabel_' . $criterion['slot'];
             if (count($criterion['levels']) < 2) {
-                $errors['rubriccriterionlabel_' . $criterion['slot']] =
-                    get_string('rubriccriterionminlevels', 'mod_peerreviewstudio');
+                $errors[$field] = get_string('rubriccriterionminlevels', 'mod_peerreviewstudio');
+                continue;
+            }
+            $scores = array_column($criterion['levels'], 'score');
+            if (min($scores) < 0 || max($scores) <= 0) {
+                // A criterion nobody can score points on would never count.
+                $errors[$field] = get_string('rubriccriterionneedsscore', 'mod_peerreviewstudio');
             }
         }
 
         // Once peer reviews store rubric answers, the rubric structure is
         // locked: labels and scores may change but criteria and levels
         // cannot be removed without orphaning existing feedback.
-        if (!empty($data['instance']) && $rubricdefinition
-                && peerreviewstudio_activity_has_rubric_answers((int)$data['instance'])) {
+        if (!empty($data['instance']) && peerreviewstudio_activity_has_rubric_answers((int)$data['instance'])) {
             $current = peerreviewstudio_get_activity_rubric((int)$data['instance']);
             if (count($rubricdefinition) < count($current)) {
                 $errors['rubriccriterionlabel_1'] = get_string('rubriclockedstructure', 'mod_peerreviewstudio');

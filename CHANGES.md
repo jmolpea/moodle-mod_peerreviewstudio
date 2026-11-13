@@ -1,5 +1,114 @@
 # Changelog
 
+## 1.0.0 (2026-11-12)
+
+Full audit before the public release: architecture, database, security,
+privacy, permissions, every screen, and the automated tests, which for the
+first time run inside real Moodle sites (4.5 to 5.3).
+
+### Fixed: defects that broke features
+- **Privacy export and deletion crashed.** The privacy provider called a
+  method that does not exist (`approved_contextlist::get_userid()`), so any
+  data export or deletion request involving the plugin failed.
+- **Restoring a course with logs failed.** The restore task did not define
+  the restore log rules that Moodle requires, which throws an exception.
+- **The AI review did not work with current models**: the plugin's own
+  provider client read only the first block of the answer and sent options
+  that current models reject. The client is gone: AI review now uses the
+  Moodle AI subsystem (see "Changed").
+- **A failed AI call was lost for ever** in the second review (no retry), and
+  the fallback review retried without limit. Both now retry for a while and
+  then give up; when the fallback gives up the tutors are notified.
+- **Permissions did not match their definition.** Module capabilities cloned
+  their permissions from core capabilities, which overrides the archetypes:
+  guests could see their status, non-editing teachers could not override
+  grades. All capabilities now use the archetype defaults (an upgrade step
+  aligns existing sites).
+- **Submission status mixed two things**: the reviews a submission received
+  and the reviews its author wrote. A learner who finished reviewing saw
+  "Reviewed" although nobody had reviewed their own work. Status now only
+  describes the submission; reviewing progress is shown separately.
+- **Reviewers who had left the course were still matched**, leaving
+  submissions stuck. Only active participants who can review are matched.
+- **Grades were published before the feedback**: the gradebook showed 0 as
+  soon as a learner submitted and revealed peer grades during the review
+  phase. Grades are now published together with the feedback, and a
+  submission nobody reviewed stays ungraded instead of getting 0.
+- **Manual mode with old dates blocked submissions.** Dates left over from
+  scheduled mode are now ignored in manual and open modes.
+- **The grade override rejected the value it displayed** in languages that
+  use a decimal comma.
+- **A submission could be changed after it had been reviewed** (always, in
+  open mode). It is now frozen once reviewers are matched.
+- **Changing the maximum grade or the rubric scores left old grades as they
+  were.** Stored grades are recalculated from the rubric answers.
+- The manual assignment event stored no assignment id (undefined property).
+- Reviewer withdrawal notices were sent when the deadline had simply passed.
+
+### Changed
+- **Matching waits for the review phase** in scheduled and manual modes, so
+  every submission takes part and reviewers are only told about work they
+  can start. The manual *Allocation* phase now matches reviewers without
+  opening the reviews.
+- **Notifications**: authors get one "feedback available" message when it is
+  released instead of one per review; tutors get one digest per run instead
+  of one message per learner; nobody is notified about an activity they
+  cannot open.
+- **Tutor dashboard** rewritten: summary, "needs attention" list, and one
+  row per participant. It no longer runs a matching simulation per row, so
+  it stays fast on large courses. Email addresses follow the site's user
+  identity settings, and separate groups are respected.
+- **Reciprocal reviews are allowed by default** and the defaults are 2
+  reviews per learner and per submission: blocking reciprocity left small
+  groups without eligible reviewers.
+- Reviewer matching is serialised with a lock, saving a review is one
+  transaction, and a double click can no longer create two submissions.
+- Database: indexes that match the queries; the upgraded schema is identical
+  to a fresh install.
+- Submission files are always sent as downloads.
+
+### Changed
+- **AI review now uses the Moodle AI subsystem (core_ai).** The plugin no
+  longer has a provider, API key, or model of its own, and makes no HTTP
+  request itself: every evaluation is a core "Generate text" action, so
+  the provider, model, rate limits, and usage reports are the ones of
+  Site administration > General > AI. Any provider the site has (OpenAI,
+  Azure AI, Ollama, DeepSeek, Gemini, AWS Bedrock, Anthropic, depending on
+  the Moodle version) works.
+- **The site AI policy is respected.** A learner's content is only sent to
+  the AI once that learner has accepted the site AI policy, which they can
+  do from the activity. Until then their work is reviewed by peers only,
+  and evaluations that were waiting are queued when they accept.
+- **The "AI tools" course setting (Moodle 5.1+) is respected**: with AI
+  turned off for a course, AI review cannot be enabled and does not run.
+- Each request is made for the person who wrote the content (the author
+  for a submission, the reviewer for a review), in the activity context.
+  A request limit is retried for longer than other failures.
+- **Upgrade note**: the plugin's AI provider, API key, and model settings
+  are deleted on upgrade. Sites that used AI review must set up an AI
+  provider in Site administration > General > AI > AI providers.
+
+### Added
+- **Tutor page for each submission**: the work and its files, every review
+  received with reviewer, rubric answers and comments, AI assessments, grade
+  breakdown, and the tutor actions. Each view is logged.
+- **Activity completion rules**: submit, and complete the required reviews.
+- **Calendar and timeline deadlines** and activity dates for scheduled mode.
+- **Grade category and grade to pass** in the activity settings.
+- **Course reset** support (removes learner data, shifts dates).
+- **AI review**: a page to test that the site's AI provider answers in the
+  format the plugin needs. The AI now reads the text of attached text and
+  word processor files (.docx, .odt), and only grades work it could read
+  in full.
+- Learners see their reviewing progress, the list of their reviews, when
+  feedback will be available, and their grade breakdown.
+- Tests: 64 PHPUnit tests with a data generator, 4 Behat scenarios, and a GitHub Actions
+  workflow that runs moodle-plugin-ci on Moodle 4.5 to 5.3.
+
+### Removed
+- Dead code and unused language strings, the retired `reviewed` status, and
+  the per-row eligibility columns of the old dashboard.
+
 ## 0.9.12 (2026-11-12)
 
 Two defects found while running a full course as a test student.

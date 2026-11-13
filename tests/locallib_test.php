@@ -17,1012 +17,795 @@
 namespace mod_peerreviewstudio;
 
 use mod_peerreviewstudio\local\service\dashboard_service;
-use mod_peerreviewstudio\privacy\provider;
 
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_current_phase')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_assignment_queue')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_reviewer_candidates')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_submission')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_review')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_refresh_submission_grade')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_review_followups')]
+#[\PHPUnit\Framework\Attributes\CoversClass(dashboard_service::class)]
 /**
- * Unit tests for mod_peerreviewstudio local library functions.
+ * Unit tests for the workflow, matching, grading, and follow-up logic.
  *
  * @package     mod_peerreviewstudio
  * @copyright   2026 Julio Molpeceres
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
- * @covers      \mod_peerreviewstudio
+ * @covers      ::peerreviewstudio_get_current_phase
+ * @covers      ::peerreviewstudio_process_assignment_queue
+ * @covers      ::peerreviewstudio_get_reviewer_candidates
+ * @covers      ::peerreviewstudio_save_submission
+ * @covers      ::peerreviewstudio_save_review
+ * @covers      ::peerreviewstudio_refresh_submission_grade
+ * @covers      ::peerreviewstudio_process_review_followups
+ * @covers      \mod_peerreviewstudio\local\service\dashboard_service
  */
 final class locallib_test extends \advanced_testcase {
+    /** @var \stdClass Course used by the test. */
+    protected \stdClass $course;
+
+    /** @var \mod_peerreviewstudio_generator Plugin generator. */
+    protected \mod_peerreviewstudio_generator $plugingenerator;
+
+    /** @var \phpunit_message_sink Sink collecting the notifications sent. */
+    protected \phpunit_message_sink $sink;
+
     /**
-     * Redirect messages so workflow notifications do not abort the tests.
+     * Common set-up: a course, the plugin generator, and a message sink.
      */
     protected function setUp(): void {
+        global $CFG;
         parent::setUp();
-        $this->redirectMessages();
-    }
+        require_once($CFG->dirroot . '/mod/peerreviewstudio/lib.php');
 
-    /**
-     * Create one activity with sensible defaults for tests.
-     *
-     * @param array $overrides Field overrides.
-     * @return array [course, activity]
-     */
-    protected function create_activity(array $overrides = []): array {
         $this->resetAfterTest();
-
-        $generator = $this->getDataGenerator();
-        $course = $generator->create_course();
-        $activity = $generator->create_module('peerreviewstudio', array_merge([
-            'course' => $course->id,
-            'name' => 'Peer Review Studio Test',
-            'submissiontype' => 'onlinetext',
-            'reviewcountrequired' => 1,
-            'reviewsreceivedtarget' => 1,
-            'autoassignenabled' => 0,
-            'reviewpoolmode' => 'any',
-            'avoidreciprocalreviews' => 1,
-            'workflowmode' => 'manual',
-            'manualphase' => 'review',
-            'grademaxsubmission' => 80,
-            'grademaxreview' => 20,
-        ], $overrides));
-
-        return [$course, $activity];
+        $this->course = $this->getDataGenerator()->create_course();
+        $this->plugingenerator = $this->getDataGenerator()->get_plugin_generator('mod_peerreviewstudio');
+        $this->sink = $this->redirectMessages();
     }
 
     /**
-     * Insert one submission row directly.
+     * Create an activity in the test course and return its stored record.
      *
-     * @param \stdClass $activity Activity record.
-     * @param \stdClass $user Owner.
-     * @param string $status Submission status.
+     * @param array $settings Activity settings.
      * @return \stdClass
      */
-    protected function create_submission(\stdClass $activity, \stdClass $user, string $status = 'submitted'): \stdClass {
-        global $DB;
+    protected function create_activity(array $settings = []): \stdClass {
+        $instance = $this->plugingenerator->create_instance(['course' => $this->course->id] + $settings);
+        return $this->plugingenerator->get_activity($instance);
+    }
 
-        $now = time();
-        $submission = (object) [
-            'peerreviewstudioid' => $activity->id,
-            'userid' => $user->id,
-            'status' => $status,
-            'onlinetext' => 'Submission by ' . $user->id,
-            'onlinetextformat' => FORMAT_HTML,
-            'timesubmitted' => $now,
-            'timecreated' => $now,
-            'timemodified' => $now,
-        ];
-        $submission->id = $DB->insert_record('peerreviewstudio_submissions', $submission);
+    /**
+     * Enrol a number of new students in the test course.
+     *
+     * @param int $count How many.
+     * @return \stdClass[]
+     */
+    protected function create_students(int $count): array {
+        $students = [];
+        for ($i = 0; $i < $count; $i++) {
+            $students[] = $this->getDataGenerator()->create_and_enrol($this->course, 'student');
+        }
+        return $students;
+    }
+
+    /**
+     * Names of the notifications sent to one user since the sink was last cleared.
+     *
+     * @param int $userid Recipient.
+     * @return string[]
+     */
+    protected function notifications_for(int $userid): array {
+        $names = [];
+        foreach ($this->sink->get_messages() as $message) {
+            if ((int)$message->useridto === $userid && $message->component === 'mod_peerreviewstudio') {
+                $names[] = $message->eventtype;
+            }
+        }
+        return $names;
+    }
+
+    /**
+     * Reload one submission.
+     *
+     * @param \stdClass $submission Submission record.
+     * @return \stdClass
+     */
+    protected function reload(\stdClass $submission): \stdClass {
+        global $DB;
         return $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
     }
 
     /**
-     * Insert one assignment row directly.
+     * Gradebook grade of one user, or null when not graded.
      *
      * @param \stdClass $activity Activity record.
-     * @param \stdClass $submission Submission record.
-     * @param \stdClass $reviewer Reviewer.
-     * @param string $status Assignment status.
-     * @return \stdClass
+     * @param int $userid User id.
+     * @return float|null
      */
-    protected function create_assignment(
-        \stdClass $activity,
-        \stdClass $submission,
-        \stdClass $reviewer,
-        string $status = 'assigned'
-    ): \stdClass {
-        global $DB;
-
-        $now = time();
-        $assignment = (object) [
-            'peerreviewstudioid' => $activity->id,
-            'submissionid' => $submission->id,
-            'reviewerid' => $reviewer->id,
-            'status' => $status,
-            'timeassigned' => $now,
-            'timeopened' => 0,
-            'timecompleted' => $status === 'completed' ? $now : 0,
-            'timemodified' => $now,
-        ];
-        $assignment->id = $DB->insert_record('peerreviewstudio_assignments', $assignment);
-        return $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-    }
-
-    public function test_extract_rubric_definition_from_form_returns_criteria(): void {
-        $data = [
-            'rubriccriterionlabel_1' => 'Clarity',
-            'rubriccriteriondescription_1' => 'Readable structure',
-            'rubriccriterionweight_1' => 1,
-            'rubriclevellabel_1_1' => 'Low',
-            'rubriclevelscore_1_1' => 1,
-            'rubriclevellabel_1_2' => 'High',
-            'rubriclevelscore_1_2' => 4,
-        ];
-
-        $definition = \peerreviewstudio_extract_rubric_definition_from_form($data);
-        $this->assertCount(1, $definition);
-        $this->assertSame('Clarity', $definition[0]['label']);
-        $this->assertSame(1, $definition[0]['slot']);
-        $this->assertCount(2, $definition[0]['levels']);
-    }
-
-    public function test_extract_rubric_definition_keeps_original_slots(): void {
-        $data = [
-            'rubriccriterionlabel_2' => 'Only criterion in slot two',
-            'rubriccriterionweight_2' => 1,
-            'rubriclevellabel_2_1' => 'Low',
-            'rubriclevelscore_2_1' => 1,
-            'rubriclevellabel_2_2' => 'High',
-            'rubriclevelscore_2_2' => 4,
-        ];
-
-        $definition = \peerreviewstudio_extract_rubric_definition_from_form($data);
-        $this->assertCount(1, $definition);
-        $this->assertSame(2, $definition[0]['slot']);
-    }
-
-    public function test_calculate_rubric_result_scales_grade_and_keeps_comments(): void {
-        $rubric = [
-            [
-                'id' => 10,
-                'weight' => 1,
-                'levels' => [
-                    ['id' => 100, 'label' => 'Low', 'score' => 1],
-                    ['id' => 101, 'label' => 'High', 'score' => 4],
-                ],
-            ],
-            [
-                'id' => 20,
-                'weight' => 1,
-                'levels' => [
-                    ['id' => 200, 'label' => 'Low', 'score' => 2],
-                    ['id' => 201, 'label' => 'High', 'score' => 5],
-                ],
-            ],
-        ];
-        $formdata = [
-            'criterion_10' => 101,
-            'criterioncomment_10' => 'Muy claro',
-            'criterion_20' => 200,
-            'criterioncomment_20' => 'Mejorable',
-        ];
-
-        $result = \peerreviewstudio_calculate_rubric_result($rubric, $formdata, 10);
-        $this->assertEqualsWithDelta(6.67, $result['grade'], 0.001);
-        $this->assertSame('Muy claro', $result['answers'][0]['commenttext']);
-        $this->assertSame('Mejorable', $result['answers'][1]['commenttext']);
-    }
-
-    public function test_calculate_rubric_result_returns_zero_without_grademax(): void {
-        $rubric = [
-            [
-                'id' => 10,
-                'weight' => 1,
-                'levels' => [
-                    ['id' => 100, 'label' => 'Low', 'score' => 1],
-                    ['id' => 101, 'label' => 'High', 'score' => 4],
-                ],
-            ],
-        ];
-        $result = \peerreviewstudio_calculate_rubric_result($rubric, ['criterion_10' => 101], 0);
-        $this->assertEqualsWithDelta(0.0, $result['grade'], 0.001);
-        $this->assertCount(1, $result['answers']);
-    }
-
-    public function test_ineligible_candidates_summary_groups_labels(): void {
-        $candidates = [
-            (object)['reasonlabels' => ['Same group blocked', 'Reciprocal blocked']],
-            (object)['reasonlabels' => ['Same group blocked']],
-            (object)['reasonlabels' => ['Already assigned']],
-        ];
-
-        $summary = \peerreviewstudio_ineligible_candidates_summary($candidates);
-        $this->assertStringContainsString('Same group blocked (2)', $summary);
-        $this->assertStringContainsString('Reciprocal blocked (1)', $summary);
-        $this->assertStringContainsString('Already assigned (1)', $summary);
-    }
-
-    public function test_dashboard_filter_rows_filters_by_status_and_search(): void {
-        $rows = [
-            (object)['status' => 'queued', 'firstname' => 'Ana', 'lastname' => 'Lopez', 'email' => 'ana@example.com'],
-            (object)['status' => 'reviewed', 'firstname' => 'Luis', 'lastname' => 'Martin', 'email' => 'luis@example.com'],
-        ];
-
-        $filtered = dashboard_service::filter_rows($rows, 'queued', 'ana');
-        $this->assertCount(1, $filtered);
-        $this->assertSame('Ana', $filtered[0]->firstname);
-    }
-
-    public function test_calculate_review_completion_grade_caps_at_max(): void {
-        $this->assertEqualsWithDelta(5.0, \peerreviewstudio_calculate_review_completion_grade(1, 2, 10), 0.001);
-        $this->assertEqualsWithDelta(10.0, \peerreviewstudio_calculate_review_completion_grade(5, 2, 10), 0.001);
-        $this->assertEqualsWithDelta(0.0, \peerreviewstudio_calculate_review_completion_grade(1, 2, 0), 0.001);
-    }
-
-    public function test_get_current_phase_supports_manual_mode(): void {
-        $activity = (object) [
-            'workflowmode' => 'manual',
-            'manualphase' => 'feedback',
-            'timeopen' => 0,
-            'timeclose' => 0,
-            'timereviewdue' => 0,
-        ];
-
-        $this->assertSame('feedback', \peerreviewstudio_get_current_phase($activity));
-    }
-
-    public function test_get_current_phase_scheduled_transitions(): void {
-        $now = time();
-        $base = (object) [
-            'workflowmode' => 'scheduled',
-            'manualphase' => 'submission',
-            'timeopen' => 0,
-            'timeclose' => 0,
-            'timereviewdue' => 0,
-        ];
-
-        // Without dates the activity stays in the submission phase.
-        $this->assertSame('submission', \peerreviewstudio_get_current_phase($base));
-
-        // Before close: submission.
-        $activity = clone $base;
-        $activity->timeclose = $now + DAYSECS;
-        $activity->timereviewdue = $now + 2 * DAYSECS;
-        $this->assertSame('submission', \peerreviewstudio_get_current_phase($activity));
-
-        // After close, before review due: review.
-        $activity = clone $base;
-        $activity->timeclose = $now - DAYSECS;
-        $activity->timereviewdue = $now + DAYSECS;
-        $this->assertSame('review', \peerreviewstudio_get_current_phase($activity));
-
-        // After review due: feedback.
-        $activity = clone $base;
-        $activity->timeclose = $now - 2 * DAYSECS;
-        $activity->timereviewdue = $now - DAYSECS;
-        $this->assertSame('feedback', \peerreviewstudio_get_current_phase($activity));
-    }
-
-    public function test_visible_workflow_phases_hide_unreachable_scheduled_steps(): void {
-        [, $activity] = $this->create_activity(['workflowmode' => 'scheduled']);
-        $phases = \peerreviewstudio_visible_workflow_phases($activity);
-        $this->assertSame(['submission', 'review', 'feedback'], array_keys($phases));
-
-        [, $manualactivity] = $this->create_activity(['workflowmode' => 'manual']);
-        $manualphases = \peerreviewstudio_visible_workflow_phases($manualactivity);
-        $this->assertSame(['submission', 'allocation', 'review', 'feedback', 'closed'], array_keys($manualphases));
-
-        [, $openactivity] = $this->create_activity(['workflowmode' => 'open']);
-        $openphases = \peerreviewstudio_visible_workflow_phases($openactivity);
-        $this->assertSame(['ongoing'], array_keys($openphases));
-    }
-
-    public function test_open_workflow_mode_never_gates_by_calendar_or_manual_phase(): void {
-        // No dates set at all, unlike scheduled mode which would require them.
-        $activity = (object) [
-            'workflowmode' => 'open',
-            'manualphase' => 'submission',
-            'timeopen' => 0,
-            'timeclose' => 0,
-            'timereviewdue' => 0,
-        ];
-
-        $this->assertSame('ongoing', \peerreviewstudio_get_current_phase($activity));
-        $this->assertTrue(\peerreviewstudio_phase_allows_submissions($activity));
-        $this->assertTrue(\peerreviewstudio_phase_allows_reviews($activity));
-        $this->assertTrue(\peerreviewstudio_submissions_open($activity));
-
-        // Feedback is gated per-submission on its own status, not on a shared phase.
-        $notyet = (object) ['status' => 'partiallyreviewed'];
-        $this->assertFalse(\peerreviewstudio_phase_allows_feedback($activity, $notyet));
-        $done = (object) ['status' => 'closed'];
-        $this->assertTrue(\peerreviewstudio_phase_allows_feedback($activity, $done));
-        $this->assertFalse(\peerreviewstudio_phase_allows_feedback($activity, null));
-    }
-
-    public function test_open_workflow_mode_ignores_stale_dates_from_a_previous_mode(): void {
-        // Switching an activity from scheduled to open should not leave it
-        // gated by dates a teacher configured before the switch.
-        $now = time();
-        $activity = (object) [
-            'workflowmode' => 'open',
-            'manualphase' => 'submission',
-            'timeopen' => $now - 10 * DAYSECS,
-            'timeclose' => $now - DAYSECS,
-            'timereviewdue' => $now - DAYSECS,
-        ];
-
-        $this->assertTrue(\peerreviewstudio_phase_allows_submissions($activity));
-        $this->assertTrue(\peerreviewstudio_submissions_open($activity));
-    }
-
-    public function test_normalize_teacher_grade_override_clamps_and_allows_empty(): void {
-        $activity = (object) [
-            'grademaxsubmission' => 80,
-            'grademaxreview' => 20,
-        ];
-
-        $this->assertNull(\peerreviewstudio_normalize_teacher_grade_override($activity, ''));
-        $this->assertEqualsWithDelta(100.0, \peerreviewstudio_normalize_teacher_grade_override($activity, '120'), 0.001);
-        $this->assertEqualsWithDelta(0.0, \peerreviewstudio_normalize_teacher_grade_override($activity, '-4'), 0.001);
-    }
-
-    public function test_get_eligible_reviewers_respects_reciprocal_rule(): void {
-        [$course, $activity] = $this->create_activity([
-            'reviewpoolmode' => 'any',
-            'avoidreciprocalreviews' => 1,
-        ]);
-
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'submitted');
-        $reviewersubmission = $this->create_submission($activity, $reviewer, 'submitted');
-        $this->create_assignment($activity, $reviewersubmission, $author, 'assigned');
-
-        $eligible = \peerreviewstudio_get_eligible_reviewers_for_submission($activity, $authorsubmission);
-        $this->assertCount(0, $eligible);
-
-        $ineligible = \peerreviewstudio_get_ineligible_reviewers_for_submission($activity, $authorsubmission);
-        $this->assertCount(1, $ineligible);
-        $this->assertContains('Reciprocal reviews are blocked for this activity.', $ineligible[0]->reasonlabels);
-    }
-
-    public function test_get_eligible_reviewers_returns_a_genuinely_eligible_candidate(): void {
-        // Regression test: peerreviewstudio_get_eligible_reviewers_for_submission()
-        // used to select rows without the 'status' column, so
-        // peerreviewstudio_evaluate_reviewer_candidate() read an undefined
-        // property, coerced it to '', and rejected every candidate as
-        // 'candidateinactive' — silently breaking auto-assignment for any
-        // activity with more than one submission.
-        [, $activity] = $this->create_activity([
-            'reviewpoolmode' => 'any',
-            'avoidreciprocalreviews' => 0,
-        ]);
-
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $candidate = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'submitted');
-        $this->create_submission($activity, $candidate, 'submitted');
-
-        $eligible = \peerreviewstudio_get_eligible_reviewers_for_submission($activity, $authorsubmission);
-        $this->assertCount(1, $eligible);
-        $this->assertSame((int)$candidate->id, (int)reset($eligible)->userid);
-
-        $ineligible = \peerreviewstudio_get_ineligible_reviewers_for_submission($activity, $authorsubmission);
-        $this->assertCount(0, $ineligible);
-    }
-
-    public function test_assign_submission_to_reviewer_creates_assignment_and_resolves_queue(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'queued');
-        $reviewersubmission = $this->create_submission($activity, $reviewer, 'submitted');
-        \peerreviewstudio_queue_submission($activity, (int)$authorsubmission->id, 'awaiting_reviewer');
-
-        $assigned = \peerreviewstudio_assign_submission_to_reviewer($activity, (int)$authorsubmission->id, (int)$reviewer->id);
-
-        $this->assertTrue($assigned);
-        $assignment = $DB->get_record('peerreviewstudio_assignments', [
-            'submissionid' => $authorsubmission->id,
-            'reviewerid' => $reviewer->id,
-        ], '*', MUST_EXIST);
-        $this->assertSame('assigned', $assignment->status);
-
-        $updatedsubmission = $DB->get_record('peerreviewstudio_submissions', ['id' => $authorsubmission->id], '*', MUST_EXIST);
-        $this->assertSame('assigned', $updatedsubmission->status);
-
-        $updatedreviewersubmission = $DB->get_record(
-            'peerreviewstudio_submissions', ['id' => $reviewersubmission->id], '*', MUST_EXIST
-        );
-        $this->assertSame('assigned', $updatedreviewersubmission->status);
-
-        $this->assertEquals(0, $DB->count_records('peerreviewstudio_queue', [
-            'submissionid' => $authorsubmission->id,
-            'status' => 'pending',
-        ]));
-    }
-
-    public function test_requeue_submission_cancels_open_assignment_and_creates_pending_queue(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 0,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-        $fallback = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $reviewersubmission = $this->create_submission($activity, $reviewer, 'assigned');
-        $fallbacksubmission = $this->create_submission($activity, $fallback, 'submitted');
-        $assignment = $this->create_assignment($activity, $authorsubmission, $reviewer, 'assigned');
-
-        \peerreviewstudio_requeue_submission($activity, (int)$authorsubmission->id);
-
-        $cancelled = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $this->assertSame('cancelled', $cancelled->status);
-
-        $updatedreviewersubmission = $DB->get_record(
-            'peerreviewstudio_submissions', ['id' => $reviewersubmission->id], '*', MUST_EXIST
-        );
-        $this->assertSame('submitted', $updatedreviewersubmission->status);
-
-        $updatedsubmission = $DB->get_record('peerreviewstudio_submissions', ['id' => $authorsubmission->id], '*', MUST_EXIST);
-        $this->assertContains($updatedsubmission->status, ['queued', 'assigned']);
-
-        $this->assertGreaterThanOrEqual(1, $DB->count_records('peerreviewstudio_queue', [
-            'submissionid' => $authorsubmission->id,
-        ]));
-
-        $newassignment = $DB->get_record_select(
-            'peerreviewstudio_assignments',
-            'submissionid = :submissionid AND reviewerid = :reviewerid',
-            [
-                'submissionid' => $authorsubmission->id,
-                'reviewerid' => $fallback->id,
-            ]
-        );
-        $this->assertNotFalse($newassignment);
-        $this->assertSame('assigned', $newassignment->status);
-    }
-
-    public function test_process_assignment_queue_assigns_up_to_received_target(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 1,
-            'reviewsreceivedtarget' => 2,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $peerone = $generator->create_user();
-        $peertwo = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'queued');
-        $this->create_submission($activity, $peerone, 'submitted');
-        $this->create_submission($activity, $peertwo, 'submitted');
-
-        \peerreviewstudio_queue_submission($activity, (int)$authorsubmission->id, 'awaiting_reviewer');
-        \peerreviewstudio_process_assignment_queue($activity);
-
-        $this->assertEquals(2, $DB->count_records('peerreviewstudio_assignments', [
-            'submissionid' => $authorsubmission->id,
-            'status' => 'assigned',
-        ]));
-        $reviewerids = $DB->get_fieldset_select(
-            'peerreviewstudio_assignments', 'reviewerid', 'submissionid = :sid', ['sid' => $authorsubmission->id]
-        );
-        $this->assertEqualsCanonicalizing([(int)$peerone->id, (int)$peertwo->id], array_map('intval', $reviewerids));
-
-        $this->assertEquals(0, $DB->count_records('peerreviewstudio_queue', [
-            'submissionid' => $authorsubmission->id,
-            'status' => 'pending',
-        ]));
-
-        $updated = $DB->get_record('peerreviewstudio_submissions', ['id' => $authorsubmission->id], '*', MUST_EXIST);
-        $this->assertSame('assigned', $updated->status);
-    }
-
-    public function test_process_assignment_queue_keeps_entry_pending_without_reviewers(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 1,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'queued');
-        \peerreviewstudio_queue_submission($activity, (int)$authorsubmission->id, 'awaiting_reviewer');
-        \peerreviewstudio_process_assignment_queue($activity);
-
-        $queueentry = $DB->get_record('peerreviewstudio_queue', ['submissionid' => $authorsubmission->id], '*', MUST_EXIST);
-        $this->assertSame('pending', $queueentry->status);
-        $this->assertEquals(1, (int)$queueentry->attempts);
-        $this->assertEquals(0, $DB->count_records('peerreviewstudio_assignments', ['submissionid' => $authorsubmission->id]));
-    }
-
-    public function test_save_submission_edit_does_not_stack_extra_reviewers(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 1,
-            'reviewsreceivedtarget' => 1,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $peer = $generator->create_user();
-
-        $this->create_submission($activity, $peer, 'submitted');
-
-        $submission = \peerreviewstudio_save_submission($activity, (int)$author->id, ['text' => 'v1', 'format' => FORMAT_HTML]);
-        $this->assertEquals(1, $DB->count_records('peerreviewstudio_assignments', ['submissionid' => $submission->id]));
-        $this->assertSame('assigned', $DB->get_field('peerreviewstudio_submissions', 'status', ['id' => $submission->id]));
-
-        // Editing the submission must not queue or assign an extra reviewer.
-        $submission = \peerreviewstudio_save_submission(
-            $activity, (int)$author->id, ['text' => 'v2 edited', 'format' => FORMAT_HTML]
-        );
-        $this->assertEquals(1, $DB->count_records('peerreviewstudio_assignments', ['submissionid' => $submission->id]));
-        $this->assertSame('assigned', (string)$submission->status);
-        $this->assertSame('v2 edited', (string)$submission->onlinetext);
-    }
-
-    public function test_save_submission_actually_stores_grade_in_gradebook(): void {
+    protected function gradebook_grade(\stdClass $activity, int $userid): ?float {
         global $CFG;
         require_once($CFG->libdir . '/gradelib.php');
 
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 0,
-            'grademaxsubmission' => 80,
-            'grademaxreview' => 20,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $generator->enrol_user($author->id, $course->id, 'student');
-
-        \peerreviewstudio_save_submission($activity, (int)$author->id, ['text' => 'v1', 'format' => FORMAT_HTML]);
-
-        // The grades array passed to grade_update() must be indexed by user
-        // id; if it is indexed by position instead, it silently ignores the
-        // grade and logs "Incorrect grade array index, must be user id!".
-        $gradinginfo = grade_get_grades($course->id, 'mod', 'peerreviewstudio', $activity->id, $author->id);
-        $this->assertNotEmpty($gradinginfo->items);
-        $this->assertArrayHasKey((int)$author->id, $gradinginfo->items[0]->grades);
-        $this->assertNotNull($gradinginfo->items[0]->grades[$author->id]->grade);
+        $grades = grade_get_grades($activity->course, 'mod', 'peerreviewstudio', $activity->id, $userid);
+        $grade = $grades->items[0]->grades[$userid]->grade ?? null;
+        return $grade === null ? null : (float)$grade;
     }
 
-    public function test_sync_activity_rubric_preserves_ids_and_answers(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $rubric = \peerreviewstudio_get_activity_rubric((int)$activity->id);
-        $this->assertNotEmpty($rubric);
-        $originalcriterionid = (int)$rubric[0]['id'];
-        $originallevelid = (int)$rubric[0]['levels'][1]['id'];
-
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $this->create_submission($activity, $reviewer, 'assigned');
-        $assignment = $this->create_assignment($activity, $authorsubmission, $reviewer, 'assigned');
-        $review = \peerreviewstudio_save_review($activity, $assignment, (int)$reviewer->id, 'Comentario', 40.0, [[
-            'criterionid' => $originalcriterionid,
-            'levelid' => $originallevelid,
-            'score' => (float)$rubric[0]['levels'][1]['score'],
-            'commenttext' => 'Bien',
-        ]]);
-
-        // Teacher renames criteria and levels without changing the structure.
-        $newdefinition = [];
-        foreach ($rubric as $criterion) {
-            $newdefinition[] = [
-                'label' => $criterion['label'] . ' (edited)',
-                'description' => $criterion['description'],
-                'weight' => $criterion['weight'],
-                'levels' => array_map(static function(array $level): array {
-                    return ['label' => $level['label'] . ' (edited)', 'score' => $level['score']];
-                }, $criterion['levels']),
-            ];
-        }
-        \peerreviewstudio_sync_activity_rubric((int)$activity->id, $newdefinition);
-
-        $updatedrubric = \peerreviewstudio_get_activity_rubric((int)$activity->id);
-        $this->assertSame($originalcriterionid, (int)$updatedrubric[0]['id']);
-        $this->assertSame($originallevelid, (int)$updatedrubric[0]['levels'][1]['id']);
-        $this->assertStringEndsWith('(edited)', $updatedrubric[0]['label']);
-
-        // The stored answer still resolves through the join used for display.
-        $answers = \peerreviewstudio_get_rubric_answers_by_review([(int)$review->id]);
-        $this->assertArrayHasKey((int)$review->id, $answers);
-        $this->assertCount(1, $answers[(int)$review->id]);
-        $this->assertTrue(\peerreviewstudio_activity_has_rubric_answers((int)$activity->id));
-    }
-
-    public function test_save_review_updates_states_answers_and_grades(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity([
-            'grademaxsubmission' => 80,
-            'grademaxreview' => 20,
-            'reviewsreceivedtarget' => 1,
-        ]);
-        \peerreviewstudio_sync_activity_rubric((int)$activity->id, [[
-            'label' => 'Quality',
-            'description' => 'Quality criterion',
-            'weight' => 1,
-            'levels' => [
-                ['label' => 'Basic', 'score' => 1],
-                ['label' => 'Excellent', 'score' => 4],
-            ],
-        ]]);
-        $rubric = \peerreviewstudio_get_activity_rubric((int)$activity->id);
-
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $reviewersubmission = $this->create_submission($activity, $reviewer, 'assigned');
-        $assignment = $this->create_assignment($activity, $authorsubmission, $reviewer, 'assigned');
-
-        $answer = [[
-            'criterionid' => (int)$rubric[0]['id'],
-            'levelid' => (int)$rubric[0]['levels'][1]['id'],
-            'score' => (float)$rubric[0]['levels'][1]['score'],
-            'commenttext' => 'Muy bien resuelto',
-        ]];
-
-        // The review proposes 60 out of the 80 submission points.
-        $review = \peerreviewstudio_save_review($activity, $assignment, (int)$reviewer->id, 'Buen trabajo', 60.0, $answer);
-
-        $this->assertSame('submitted', $review->status);
-        $this->assertEqualsWithDelta(60.0, (float)$review->grade, 0.001);
-        $this->assertEquals(1, $DB->count_records('peerreviewstudio_r_answers', ['reviewid' => $review->id]));
-
-        $updatedassignment = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $this->assertSame('completed', $updatedassignment->status);
-
-        $updatedsubmission = $DB->get_record('peerreviewstudio_submissions', ['id' => $authorsubmission->id], '*', MUST_EXIST);
-        $this->assertSame('closed', $updatedsubmission->status);
-        $this->assertEqualsWithDelta(60.0, (float)$updatedsubmission->submissiongrade, 0.001);
-        $this->assertEqualsWithDelta(60.0, (float)$updatedsubmission->finalgrade, 0.001);
-
-        $updatedreviewersubmission = $DB->get_record(
-            'peerreviewstudio_submissions', ['id' => $reviewersubmission->id], '*', MUST_EXIST
-        );
-        $this->assertSame('reviewed', $updatedreviewersubmission->status);
-        $this->assertEqualsWithDelta(20.0, (float)$updatedreviewersubmission->reviewgrade, 0.001);
-        $this->assertEqualsWithDelta(20.0, (float)$updatedreviewersubmission->finalgrade, 0.001);
-    }
-
-    public function test_save_review_caps_grade_at_submission_maximum(): void {
-        [$course, $activity] = $this->create_activity([
-            'grademaxsubmission' => 50,
-            'grademaxreview' => 0,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $this->create_submission($activity, $reviewer, 'assigned');
-        $assignment = $this->create_assignment($activity, $authorsubmission, $reviewer, 'assigned');
-
-        $review = \peerreviewstudio_save_review($activity, $assignment, (int)$reviewer->id, 'Fuera de rango', 500.0);
-        $this->assertEqualsWithDelta(50.0, (float)$review->grade, 0.001);
-
-        $submissiongrade = \peerreviewstudio_calculate_submission_grade($activity, (int)$authorsubmission->id);
-        $this->assertEqualsWithDelta(50.0, $submissiongrade, 0.001);
-    }
-
-    public function test_calculate_submission_grade_averages_received_reviews(): void {
-        [$course, $activity] = $this->create_activity([
-            'grademaxsubmission' => 100,
-            'reviewsreceivedtarget' => 2,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewerone = $generator->create_user();
-        $reviewertwo = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $this->create_submission($activity, $reviewerone, 'assigned');
-        $this->create_submission($activity, $reviewertwo, 'assigned');
-        $assignmentone = $this->create_assignment($activity, $authorsubmission, $reviewerone, 'assigned');
-        $assignmenttwo = $this->create_assignment($activity, $authorsubmission, $reviewertwo, 'assigned');
-
-        \peerreviewstudio_save_review($activity, $assignmentone, (int)$reviewerone->id, 'A', 60.0);
-        \peerreviewstudio_save_review($activity, $assignmenttwo, (int)$reviewertwo->id, 'B', 80.0);
-
-        $this->assertEqualsWithDelta(
-            70.0, \peerreviewstudio_calculate_submission_grade($activity, (int)$authorsubmission->id), 0.001
-        );
-    }
-
-    public function test_set_teacher_grade_override_replaces_final_grade_only(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-
-        $submission = $this->create_submission($activity, $author, 'reviewed');
-        $record = $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
-        $record->submissiongrade = 60;
-        $record->reviewgrade = 10;
-        $record->finalgrade = 70;
-        $DB->update_record('peerreviewstudio_submissions', $record);
-
-        \peerreviewstudio_set_teacher_grade_override($activity, (int)$submission->id, 55.5);
-
-        $updated = $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
-        $this->assertEqualsWithDelta(55.5, (float)$updated->teachergradeoverride, 0.001);
-        $this->assertEqualsWithDelta(55.5, (float)$updated->finalgrade, 0.001);
-    }
-
-    public function test_tutor_incident_rows_flag_submission_without_reviewers(): void {
-        [$course, $activity] = $this->create_activity([
-            'autoassignenabled' => 1,
-        ]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'queued');
-        \peerreviewstudio_queue_submission($activity, (int)$authorsubmission->id, 'awaiting_reviewer');
-        \peerreviewstudio_process_assignment_queue($activity);
-
-        $incidents = \peerreviewstudio_get_tutor_incident_rows((int)$activity->id);
-        $this->assertCount(1, $incidents);
-        $this->assertSame('noreviewers', $incidents[0]->incidenttype);
-        $this->assertEquals((int)$author->id, (int)$incidents[0]->userid);
-    }
-
-    public function test_privacy_anonymise_submission_owner_data_clears_personal_fields(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-
-        $submission = $this->create_submission($activity, $author, 'closed');
-        $record = $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
-        $record->submissiongrade = 80;
-        $record->reviewgrade = 20;
-        $record->finalgrade = 100;
-        $record->teachergradeoverride = 95;
-        $DB->update_record('peerreviewstudio_submissions', $record);
-        \peerreviewstudio_queue_submission($activity, (int)$submission->id, 'awaiting_reviewer');
-
-        $context = \peerreviewstudio_get_activity_context((int)$activity->id);
-        $method = new \ReflectionMethod(provider::class, 'anonymise_submission_owner_data');
-        $method->setAccessible(true);
-        $method->invoke(null, (int)$activity->id, $context, (int)$author->id);
-
-        $updated = $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
-        $this->assertSame(0, (int)$updated->userid);
-        $this->assertSame('', $updated->onlinetext);
-        $this->assertNull($updated->submissiongrade);
-        $this->assertNull($updated->reviewgrade);
-        $this->assertNull($updated->finalgrade);
-        $this->assertNull($updated->teachergradeoverride);
-
-        $queueitem = $DB->get_record('peerreviewstudio_queue', ['submissionid' => $submission->id], '*', MUST_EXIST);
-        $this->assertSame('failed', $queueitem->status);
-    }
-
-    public function test_privacy_anonymise_reviewer_data_clears_reviewer_identity_and_comments(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        \peerreviewstudio_sync_activity_rubric((int)$activity->id, [[
-            'label' => 'Quality',
-            'description' => 'Quality criterion',
-            'weight' => 1,
-            'levels' => [
-                ['label' => 'Basic', 'score' => 1],
-                ['label' => 'Excellent', 'score' => 4],
-            ],
-        ]]);
-        $rubric = \peerreviewstudio_get_activity_rubric((int)$activity->id);
-
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $authorsubmission = $this->create_submission($activity, $author, 'assigned');
-        $this->create_submission($activity, $reviewer, 'assigned');
-        $assignment = $this->create_assignment($activity, $authorsubmission, $reviewer, 'assigned');
-        $review = \peerreviewstudio_save_review($activity, $assignment, (int)$reviewer->id, 'Comentario sensible', 20.0, [[
-            'criterionid' => (int)$rubric[0]['id'],
-            'levelid' => (int)$rubric[0]['levels'][1]['id'],
-            'score' => (float)$rubric[0]['levels'][1]['score'],
-            'commenttext' => 'Detalle sensible',
-        ]]);
-
-        $method = new \ReflectionMethod(provider::class, 'anonymise_reviewer_data');
-        $method->setAccessible(true);
-        $method->invoke(null, (int)$activity->id, (int)$reviewer->id);
-
-        $updatedassignment = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $updatedreview = $DB->get_record('peerreviewstudio_reviews', ['id' => $review->id], '*', MUST_EXIST);
-        $answer = $DB->get_record('peerreviewstudio_r_answers', ['reviewid' => $review->id], '*', MUST_EXIST);
-
-        $this->assertSame(0, (int)$updatedassignment->reviewerid);
-        $this->assertSame(0, (int)$updatedreview->reviewerid);
-        $this->assertSame('', $updatedreview->generalcomment);
-        $this->assertSame('', $answer->commenttext);
-    }
-
-    public function test_workflow_notifications_are_sent(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        // 1. Submitting notifies the author that the work was received.
-        $sink = $this->redirectMessages();
-        $submission = \peerreviewstudio_save_submission($activity, (int)$author->id, ['text' => 'Hola', 'format' => FORMAT_HTML]);
-        $messages = $sink->get_messages();
-        $this->assertCount(1, $messages);
-        $this->assertSame('submissionreceived', reset($messages)->eventtype);
-        $this->assertEquals($author->id, reset($messages)->useridto);
-
-        // 2. Assigning a review notifies the reviewer.
-        $sink->clear();
-        $this->create_submission($activity, $reviewer);
-        $this->assertTrue(
-            \peerreviewstudio_assign_submission_to_reviewer($activity, (int)$submission->id, (int)$reviewer->id)
-        );
-        $messages = $sink->get_messages();
-        $this->assertCount(1, $messages);
-        $this->assertSame('reviewassigned', reset($messages)->eventtype);
-        $this->assertEquals($reviewer->id, reset($messages)->useridto);
-
-        // 3. A completed review notifies the submission author of the grade.
-        $sink->clear();
-        $assignment = $DB->get_record('peerreviewstudio_assignments', [
-            'submissionid' => $submission->id,
-            'reviewerid' => $reviewer->id,
-        ], '*', MUST_EXIST);
-        \peerreviewstudio_save_review($activity, $assignment, (int)$reviewer->id, 'Buen trabajo', 50.0);
-        $messages = $sink->get_messages();
-        $this->assertCount(1, $messages);
-        $this->assertSame('gradereceived', reset($messages)->eventtype);
-        $this->assertEquals($author->id, reset($messages)->useridto);
-    }
-
-    public function test_followups_send_a_single_reminder_to_inactive_reviewers(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
-
-        $submission = $this->create_submission($activity, $author);
-        $this->create_submission($activity, $reviewer);
-        $assignment = $this->create_assignment($activity, $submission, $reviewer);
-        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', time() - 3 * DAYSECS, ['id' => $assignment->id]);
-
-        $sink = $this->redirectMessages();
-        \peerreviewstudio_process_review_followups($activity);
-        $messages = $sink->get_messages();
-        $this->assertCount(1, $messages);
-        $this->assertSame('reviewreminder', reset($messages)->eventtype);
-        $this->assertEquals($reviewer->id, reset($messages)->useridto);
-
-        $updated = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $this->assertGreaterThan(0, (int)$updated->timereminded);
-        $this->assertSame('assigned', $updated->status);
-
-        // A second run must not send a duplicate reminder.
-        $sink->clear();
-        \peerreviewstudio_process_review_followups($activity);
-        $this->assertCount(0, $sink->get_messages());
-    }
-
-    public function test_followups_expire_stale_assignment_and_reassign(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity(['autoassignenabled' => 1]);
-        $generator = $this->getDataGenerator();
-        $author = $generator->create_user();
-        $slacker = $generator->create_user();
-        $substitute = $generator->create_user();
-
-        $submission = $this->create_submission($activity, $author);
-        $this->create_submission($activity, $slacker);
-        $this->create_submission($activity, $substitute);
-        $assignment = $this->create_assignment($activity, $submission, $slacker);
-        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', time() - 5 * DAYSECS, ['id' => $assignment->id]);
-
-        $sink = $this->redirectMessages();
-        \peerreviewstudio_process_review_followups($activity);
-
-        $updated = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $this->assertSame('cancelled', $updated->status);
-
-        $replacement = $DB->get_record('peerreviewstudio_assignments', [
-            'submissionid' => $submission->id,
-            'status' => 'assigned',
-        ], '*', MUST_EXIST);
-        $this->assertEquals($substitute->id, (int)$replacement->reviewerid);
-
-        $types = array_map(static fn($message): string => (string)$message->eventtype, $sink->get_messages());
-        $this->assertContains('reviewwithdrawn', $types);
-        $this->assertContains('reviewassigned', $types);
-    }
-
-    public function test_followups_escalate_to_tutors_when_cap_reached(): void {
-        global $DB;
-
-        [$course, $activity] = $this->create_activity();
-        $generator = $this->getDataGenerator();
-        $teacher = $generator->create_user();
-        $generator->enrol_user($teacher->id, $course->id, 'editingteacher');
-        $author = $generator->create_user();
-
-        $submission = $this->create_submission($activity, $author);
-        for ($i = 0; $i < 3; $i++) {
-            $ghost = $generator->create_user();
-            $this->create_assignment($activity, $submission, $ghost, 'cancelled');
-        }
-
-        $sink = $this->redirectMessages();
-        \peerreviewstudio_process_review_followups($activity);
-        $messages = $sink->get_messages();
-        $this->assertCount(1, $messages);
-        $this->assertSame('tutorescalation', reset($messages)->eventtype);
-        $this->assertEquals($teacher->id, reset($messages)->useridto);
-
-        $updated = $DB->get_record('peerreviewstudio_submissions', ['id' => $submission->id], '*', MUST_EXIST);
-        $this->assertGreaterThan(0, (int)$updated->timeescalated);
-
-        // Escalation fires only once.
-        $sink->clear();
-        \peerreviewstudio_process_review_followups($activity);
-        $this->assertCount(0, $sink->get_messages());
-    }
-
-    public function test_followups_clear_dead_assignments_after_scheduled_review_window(): void {
-        global $DB;
-
+    public function test_scheduled_phases_follow_the_dates(): void {
         $now = time();
-        [$course, $activity] = $this->create_activity([
+        $activity = (object) [
             'workflowmode' => 'scheduled',
-            'timeopen' => 0,
-            'timeclose' => $now - 5 * DAYSECS,
-            'timereviewdue' => $now - DAYSECS,
-        ]);
-        $generator = $this->getDataGenerator();
-        $teacher = $generator->create_user();
-        $generator->enrol_user($teacher->id, $course->id, 'editingteacher');
-        $author = $generator->create_user();
-        $reviewer = $generator->create_user();
+            'timeopen' => $now + HOURSECS,
+            'timeclose' => $now + 2 * HOURSECS,
+            'timereviewdue' => $now + 3 * HOURSECS,
+        ];
 
-        $submission = $this->create_submission($activity, $author);
-        $this->create_submission($activity, $reviewer);
-        $assignment = $this->create_assignment($activity, $submission, $reviewer);
-        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', $now - 4 * DAYSECS, ['id' => $assignment->id]);
+        // Before the opening date: submission phase, but nothing can be submitted yet.
+        $this->assertSame('submission', peerreviewstudio_get_current_phase($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertFalse(peerreviewstudio_matching_allowed($activity));
 
-        $sink = $this->redirectMessages();
-        \peerreviewstudio_process_review_followups($activity);
+        $activity->timeopen = $now - HOURSECS;
+        $this->assertTrue(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_reviews($activity));
 
-        $updated = $DB->get_record('peerreviewstudio_assignments', ['id' => $assignment->id], '*', MUST_EXIST);
-        $this->assertSame('cancelled', $updated->status);
+        $activity->timeclose = $now - 60;
+        $this->assertSame('review', peerreviewstudio_get_current_phase($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertTrue(peerreviewstudio_matching_allowed($activity));
+        $this->assertTrue(peerreviewstudio_phase_allows_reviews($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_feedback($activity));
+        $this->assertFalse(peerreviewstudio_review_window_over($activity));
 
-        $types = array_map(static fn($message): string => (string)$message->eventtype, $sink->get_messages());
-        $this->assertContains('reviewwithdrawn', $types);
-        $this->assertContains('tutorescalation', $types);
+        $activity->timereviewdue = $now - 30;
+        $this->assertSame('feedback', peerreviewstudio_get_current_phase($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_reviews($activity));
+        $this->assertTrue(peerreviewstudio_phase_allows_feedback($activity));
+        $this->assertTrue(peerreviewstudio_review_window_over($activity));
+
+        $this->assertSame(
+            ['submission', 'review', 'feedback'],
+            array_keys(peerreviewstudio_visible_workflow_phases($activity))
+        );
     }
 
-    public function test_submission_grade_uses_ai_fallback_when_no_reviews_exist(): void {
+    public function test_manual_and_open_modes_ignore_dates(): void {
+        // Stale dates from an earlier scheduled configuration must not matter.
+        $activity = (object) [
+            'workflowmode' => 'manual',
+            'manualphase' => 'submission',
+            'timeopen' => time() - 3 * DAYSECS,
+            'timeclose' => time() - 2 * DAYSECS,
+            'timereviewdue' => time() - DAYSECS,
+        ];
+        $this->assertTrue(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertFalse(peerreviewstudio_matching_allowed($activity));
+
+        $activity->manualphase = 'allocation';
+        $this->assertFalse(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertTrue(peerreviewstudio_matching_allowed($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_reviews($activity));
+
+        $activity->manualphase = 'review';
+        $this->assertTrue(peerreviewstudio_phase_allows_reviews($activity));
+        $this->assertFalse(peerreviewstudio_review_window_over($activity));
+
+        $activity->manualphase = 'closed';
+        $this->assertTrue(peerreviewstudio_phase_allows_feedback($activity));
+        $this->assertCount(5, peerreviewstudio_visible_workflow_phases($activity));
+
+        $activity->workflowmode = 'open';
+        $this->assertSame('ongoing', peerreviewstudio_get_current_phase($activity));
+        $this->assertTrue(peerreviewstudio_phase_allows_submissions($activity));
+        $this->assertTrue(peerreviewstudio_matching_allowed($activity));
+        $this->assertTrue(peerreviewstudio_phase_allows_reviews($activity));
+        // Feedback is gated per submission in open mode.
+        $this->assertFalse(peerreviewstudio_phase_allows_feedback($activity));
+        $this->assertFalse(peerreviewstudio_phase_allows_feedback($activity, (object)['status' => 'assigned']));
+        $this->assertTrue(peerreviewstudio_phase_allows_feedback($activity, (object)['status' => 'closed']));
+    }
+
+    public function test_rubric_definition_is_extracted_from_form_slots(): void {
+        $definition = peerreviewstudio_extract_rubric_definition_from_form([
+            'rubriccriterionlabel_2' => 'Second',
+            'rubriccriterionweight_2' => 2,
+            'rubriclevellabel_2_1' => 'Low',
+            'rubriclevelscore_2_1' => 0,
+            'rubriclevellabel_2_3' => 'High',
+            'rubriclevelscore_2_3' => 5,
+            // A criterion without levels is ignored.
+            'rubriccriterionlabel_4' => 'No levels',
+        ]);
+
+        $this->assertCount(1, $definition);
+        $this->assertSame(2, $definition[0]['slot']);
+        $this->assertSame('Second', $definition[0]['label']);
+        $this->assertEqualsWithDelta(2.0, $definition[0]['weight'], 0.0001);
+        $this->assertSame(['Low', 'High'], array_column($definition[0]['levels'], 'label'));
+    }
+
+    public function test_rubric_result_is_the_weighted_share_of_points(): void {
+        $rubric = [
+            ['id' => 1, 'weight' => 1.0, 'levels' => [['id' => 11, 'score' => 0], ['id' => 12, 'score' => 4]]],
+            ['id' => 2, 'weight' => 3.0, 'levels' => [['id' => 21, 'score' => 0], ['id' => 22, 'score' => 2]]],
+        ];
+        $result = peerreviewstudio_calculate_rubric_result($rubric, [
+            'criterion_1' => 12,
+            'criterion_2' => 21,
+            'criterioncomment_1' => ' Clear ',
+        ], 80.0);
+
+        // Points: 4*1 + 0*3 = 4 of 4*1 + 2*3 = 10, so 40% of 80.
+        $this->assertEqualsWithDelta(32.0, $result['grade'], 0.0001);
+        $this->assertCount(2, $result['answers']);
+        $this->assertSame('Clear', $result['answers'][0]['commenttext']);
+
+        $ungraded = peerreviewstudio_calculate_rubric_result($rubric, ['criterion_1' => 12], 0.0);
+        $this->assertEqualsWithDelta(0.0, $ungraded['grade'], 0.0001);
+    }
+
+    public function test_rubric_sync_keeps_ids_so_answers_survive_edits(): void {
         global $DB;
 
-        [$course, $activity] = $this->create_activity([
-            'aireviewenabled' => 1,
-            'aifallbackenabled' => 1,
-            'grademaxsubmission' => 80,
+        $activity = $this->create_activity();
+        $before = peerreviewstudio_get_activity_rubric((int)$activity->id);
+        $this->assertCount(3, $before);
+
+        [$author, $reviewer] = $this->create_students(2);
+        $submission = $this->plugingenerator->create_submission($activity, $author->id);
+        $this->plugingenerator->create_submission($activity, $reviewer->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$submission->id, (int)$reviewer->id);
+        $this->plugingenerator->create_review($activity, $assignment, 3);
+        $this->assertTrue(peerreviewstudio_activity_has_rubric_answers((int)$activity->id));
+
+        // Rename the criteria and halve the score of the top level.
+        $definition = $before;
+        foreach ($definition as &$criterion) {
+            $criterion['label'] .= ' (edited)';
+            $criterion['levels'][3]['score'] = 8;
+        }
+        unset($criterion);
+        peerreviewstudio_sync_activity_rubric((int)$activity->id, $definition);
+
+        $after = peerreviewstudio_get_activity_rubric((int)$activity->id);
+        $this->assertSame(array_column($before, 'id'), array_column($after, 'id'));
+        $this->assertStringEndsWith('(edited)', $after[0]['label']);
+        $this->assertSame(3, $DB->count_records('peerreviewstudio_r_answers'));
+
+        // The stored review follows the new scores: still the top level, so still the maximum.
+        peerreviewstudio_recalculate_review_grades($activity);
+        $this->assertEqualsWithDelta(100.0, (float)$DB->get_field('peerreviewstudio_reviews', 'grade', []), 0.0001);
+        $score = $DB->get_field('peerreviewstudio_r_answers', 'score', [], IGNORE_MULTIPLE);
+        $this->assertEqualsWithDelta(8.0, (float)$score, 0.0001);
+    }
+
+    public function test_open_mode_matches_reviewers_as_submissions_arrive(): void {
+        global $DB;
+
+        $activity = $this->create_activity();
+        [$a, $b, $c] = $this->create_students(3);
+
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        // Nobody else has submitted: the first submission waits.
+        $this->assertSame('queued', $suba->status);
+        $this->assertSame(['submissionreceived'], $this->notifications_for($a->id));
+
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
+        $this->assertSame('assigned', $this->reload($suba)->status);
+        $this->assertSame('assigned', $subb->status);
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id));
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$subb->id, (int)$a->id));
+        $this->assertContains('reviewassigned', $this->notifications_for($a->id));
+        $this->assertContains('reviewassigned', $this->notifications_for($b->id));
+
+        // The third submission goes to the least loaded reviewer, earliest submitter first.
+        $subc = $this->plugingenerator->create_submission($activity, $c->id);
+        $this->assertSame('assigned', $subc->status);
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$subc->id, (int)$a->id));
+        $this->assertSame(0, $DB->count_records('peerreviewstudio_queue', ['status' => 'pending']));
+        $this->assertSame(3, $DB->count_records('peerreviewstudio_assignments'));
+    }
+
+    public function test_scheduled_mode_matches_when_submissions_close(): void {
+        global $DB;
+
+        $activity = $this->create_activity([
+            'workflowmode' => 'scheduled',
+            'timeclose' => time() + HOURSECS,
+            'timereviewdue' => time() + 2 * HOURSECS,
         ]);
-        $author = $this->getDataGenerator()->create_user();
-        $submission = $this->create_submission($activity, $author);
-        $DB->set_field('peerreviewstudio_submissions', 'aigrade', 75, ['id' => $submission->id]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
 
-        $grade = \peerreviewstudio_calculate_submission_grade($activity, (int)$submission->id);
-        $this->assertEqualsWithDelta(60.0, $grade, 0.001);
+        // During the submission phase nobody is matched or told to review.
+        $this->assertSame('queued', $suba->status);
+        $this->assertSame('queued', $subb->status);
+        $this->assertSame(0, $DB->count_records('peerreviewstudio_assignments'));
+        $this->assertSame([], peerreviewstudio_get_tutor_incident_rows($activity));
+        $this->assertNotContains('reviewassigned', $this->notifications_for($a->id));
 
-        // Without the fallback flag the AI grade must not stand in.
-        $activity->aifallbackenabled = 0;
-        $grade = \peerreviewstudio_calculate_submission_grade($activity, (int)$submission->id);
-        $this->assertEqualsWithDelta(0.0, $grade, 0.001);
+        // Submissions close: the scheduled task matches everybody.
+        $DB->set_field('peerreviewstudio', 'timeclose', time() - 60, ['id' => $activity->id]);
+        $activity = $this->plugingenerator->get_activity($activity);
+        (new \mod_peerreviewstudio\task\process_assignment_queue_task())->execute();
+
+        $this->assertSame('assigned', $this->reload($suba)->status);
+        $this->assertSame('assigned', $this->reload($subb)->status);
+        $this->assertContains('reviewassigned', $this->notifications_for($a->id));
+        $this->assertContains('reviewassigned', $this->notifications_for($b->id));
+    }
+
+    public function test_only_active_participants_who_can_review_are_candidates(): void {
+        $activity = $this->create_activity(['autoassignenabled' => 0]);
+        [$author, $active, $suspended, $unenrolled] = $this->create_students(4);
+        $submission = $this->plugingenerator->create_submission($activity, $author->id);
+        foreach ([$active, $suspended, $unenrolled] as $user) {
+            $this->plugingenerator->create_submission($activity, $user->id);
+        }
+
+        // One enrolment is suspended and another one removed after submitting.
+        $enrol = enrol_get_plugin('manual');
+        $instances = enrol_get_instances($this->course->id, true);
+        $manual = reset($instances);
+        $enrol->update_user_enrol($manual, $suspended->id, ENROL_USER_SUSPENDED);
+        $enrol->unenrol_user($manual, $unenrolled->id);
+
+        $candidates = peerreviewstudio_get_reviewer_candidates($activity, $submission);
+        $this->assertSame([(int)$active->id], array_map(static fn($c) => (int)$c->userid, $candidates['eligible']));
+        $this->assertCount(2, $candidates['ineligible']);
+        foreach ($candidates['ineligible'] as $candidate) {
+            $this->assertSame(['candidateinactive'], $candidate->reasons);
+        }
+        $this->assertStringContainsString('(2)', peerreviewstudio_ineligible_candidates_summary($candidates['ineligible']));
+
+        // The author is never a candidate for their own work.
+        $this->assertFalse(peerreviewstudio_assign_submission_to_reviewer($activity, (int)$submission->id, (int)$author->id));
+        $this->assertFalse(peerreviewstudio_assign_submission_to_reviewer($activity, (int)$submission->id, (int)$suspended->id));
+        $this->assertTrue(peerreviewstudio_assign_submission_to_reviewer($activity, (int)$submission->id, (int)$active->id));
+        // Nobody reviews the same submission twice.
+        $this->assertFalse(peerreviewstudio_assign_submission_to_reviewer($activity, (int)$submission->id, (int)$active->id));
+    }
+
+    public function test_reciprocal_rule_blocks_the_mutual_pair_only(): void {
+        $activity = $this->create_activity(['avoidreciprocalreviews' => 1]);
+        [$a, $b, $c] = $this->create_students(3);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
+
+        // B reviews A, so A may not review B: B waits for somebody else.
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id));
+        $this->assertSame('queued', $subb->status);
+        $candidates = peerreviewstudio_get_reviewer_candidates($activity, $subb);
+        $this->assertSame([], $candidates['eligible']);
+        $this->assertSame(['reciprocal'], $candidates['ineligible'][0]->reasons);
+
+        $subc = $this->plugingenerator->create_submission($activity, $c->id);
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$subb->id, (int)$c->id));
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$subc->id, (int)$a->id));
+    }
+
+    public function test_group_pool_modes_restrict_the_reviewers(): void {
+        global $DB;
+
+        [$a, $b, $c] = $this->create_students(3);
+        $group1 = $this->getDataGenerator()->create_group(['courseid' => $this->course->id]);
+        $group2 = $this->getDataGenerator()->create_group(['courseid' => $this->course->id]);
+        groups_add_member($group1, $a);
+        groups_add_member($group1, $b);
+        groups_add_member($group2, $c);
+
+        $activity = $this->create_activity(['autoassignenabled' => 0, 'reviewpoolmode' => 'samegroup']);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $this->plugingenerator->create_submission($activity, $c->id);
+
+        $candidates = peerreviewstudio_get_reviewer_candidates($activity, $suba);
+        $this->assertSame([(int)$b->id], array_map(static fn($x) => (int)$x->userid, $candidates['eligible']));
+        $this->assertSame(['groupmismatch'], $candidates['ineligible'][0]->reasons);
+
+        $DB->set_field('peerreviewstudio', 'reviewpoolmode', 'differentgroup', ['id' => $activity->id]);
+        $candidates = peerreviewstudio_get_reviewer_candidates($this->plugingenerator->get_activity($activity), $suba);
+        $this->assertSame([(int)$c->id], array_map(static fn($x) => (int)$x->userid, $candidates['eligible']));
+        $this->assertSame(['samegroupblocked'], $candidates['ineligible'][0]->reasons);
+    }
+
+    public function test_status_only_reflects_the_reviews_a_submission_received(): void {
+        $activity = $this->create_activity(['reviewsreceivedtarget' => 2, 'reviewcountrequired' => 2]);
+        [$a, $b, $c] = $this->create_students(3);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
+        $subc = $this->plugingenerator->create_submission($activity, $c->id);
+
+        // A completes both reviews they owe: A's own submission does not move.
+        foreach ([$subb, $subc] as $target) {
+            $assignment = $this->plugingenerator->get_open_assignment((int)$target->id, (int)$a->id);
+            $this->plugingenerator->create_review($activity, $assignment, 2);
+        }
+        $this->assertSame(2, peerreviewstudio_count_completed_reviews((int)$activity->id, (int)$a->id));
+        $this->assertSame('assigned', $this->reload($suba)->status);
+        $this->assertSame('partiallyreviewed', $this->reload($subb)->status);
+
+        // A's submission closes when it receives its two reviews.
+        foreach ([$b, $c] as $reviewer) {
+            $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$reviewer->id);
+            $this->plugingenerator->create_review($activity, $assignment, 3);
+        }
+        $this->assertSame('closed', $this->reload($suba)->status);
+        $this->assertSame(
+            'nextstep_viewfeedback',
+            peerreviewstudio_learner_next_step($activity, $this->reload($suba), 0, 2, true)
+        );
+    }
+
+    public function test_submission_is_frozen_once_reviewers_are_matched(): void {
+        global $DB;
+
+        $activity = $this->create_activity();
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id, 'First version');
+        $this->assertTrue(peerreviewstudio_submission_is_editable($activity, $suba));
+
+        // Editing before the match changes the content and nothing else.
+        $suba = $this->plugingenerator->create_submission($activity, $a->id, 'Second version');
+        $this->assertSame('Second version', $suba->onlinetext);
+        $this->assertSame(1, $DB->count_records('peerreviewstudio_submissions'));
+        $this->assertSame(1, $DB->count_records('peerreviewstudio_queue'));
+        $this->assertSame(['submissionreceived'], $this->notifications_for($a->id));
+
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $this->assertFalse(peerreviewstudio_submission_is_editable($activity, $this->reload($suba)));
+
+        // A tutor requeue with no eligible replacement reopens it for editing.
+        $DB->delete_records('peerreviewstudio_submissions', ['userid' => $b->id]);
+        peerreviewstudio_requeue_submission($activity, (int)$suba->id);
+        $this->assertSame('queued', $this->reload($suba)->status);
+        $this->assertTrue(peerreviewstudio_submission_is_editable($activity, $this->reload($suba)));
+    }
+
+    public function test_open_mode_releases_grade_when_the_submission_is_complete(): void {
+        $activity = $this->create_activity(['grademaxsubmission' => 80, 'grademaxreview' => 20]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
+
+        // Nothing is graded, here or in the gradebook, until a review arrives.
+        $this->assertNull($suba->finalgrade);
+        $this->assertNull($this->gradebook_grade($activity, (int)$a->id));
+
+        // B reviews A with the second level of four: 50% of 80.
+        $this->sink->clear();
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->plugingenerator->create_review($activity, $assignment, 1);
+
+        $suba = $this->reload($suba);
+        $this->assertSame('closed', $suba->status);
+        $this->assertEqualsWithDelta(40.0, (float)$suba->submissiongrade, 0.0001);
+        $this->assertEqualsWithDelta(0.0, (float)$suba->reviewgrade, 0.0001);
+        $this->assertEqualsWithDelta(40.0, $this->gradebook_grade($activity, (int)$a->id), 0.0001);
+        $this->assertSame(['gradereceived'], $this->notifications_for($a->id));
+
+        // B earned the reviewing credit, but B's own work is still unreviewed.
+        $subb = $this->reload($subb);
+        $this->assertEqualsWithDelta(20.0, (float)$subb->reviewgrade, 0.0001);
+        $this->assertNull($subb->finalgrade);
+        $this->assertNull($this->gradebook_grade($activity, (int)$b->id));
+
+        // A reviews B with the top level: 80 + B's 20 of reviewing credit.
+        $assignment = $this->plugingenerator->get_open_assignment((int)$subb->id, (int)$a->id);
+        $this->plugingenerator->create_review($activity, $assignment, 3);
+        $this->assertEqualsWithDelta(100.0, $this->gradebook_grade($activity, (int)$b->id), 0.0001);
+        $this->assertEqualsWithDelta(60.0, $this->gradebook_grade($activity, (int)$a->id), 0.0001);
+    }
+
+    public function test_scheduled_mode_releases_grades_after_the_review_deadline(): void {
+        global $DB;
+
+        $activity = $this->create_activity([
+            'workflowmode' => 'scheduled',
+            'timeclose' => time() - HOURSECS,
+            'timereviewdue' => time() + HOURSECS,
+        ]);
+        [$a, $b] = $this->create_students(2);
+        // Submissions were made before the close date.
+        $DB->set_field('peerreviewstudio', 'timeclose', time() + HOURSECS, ['id' => $activity->id]);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $DB->set_field('peerreviewstudio', 'timeclose', time() - HOURSECS, ['id' => $activity->id]);
+        $activity = $this->plugingenerator->get_activity($activity);
+        peerreviewstudio_process_assignment_queue($activity);
+
+        $this->sink->clear();
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->plugingenerator->create_review($activity, $assignment, 3);
+
+        // The grade exists but stays private while reviews are still open.
+        $this->assertEqualsWithDelta(100.0, (float)$this->reload($suba)->finalgrade, 0.0001);
+        $this->assertNull($this->gradebook_grade($activity, (int)$a->id));
+        $this->assertSame([], $this->notifications_for($a->id));
+
+        // The deadline passes: the scheduled task publishes grades and tells the authors, once.
+        $DB->set_field('peerreviewstudio', 'timereviewdue', time() - 60, ['id' => $activity->id]);
+        $task = new \mod_peerreviewstudio\task\process_assignment_queue_task();
+        $task->execute();
+        $this->assertEqualsWithDelta(100.0, $this->gradebook_grade($activity, (int)$a->id), 0.0001);
+        $this->assertSame(['gradereceived'], $this->notifications_for($a->id));
+        $this->assertGreaterThan(0, (int)$DB->get_field('peerreviewstudio', 'timegradesreleased', ['id' => $activity->id]));
+
+        $task->execute();
+        $this->assertSame(['gradereceived'], $this->notifications_for($a->id));
+    }
+
+    public function test_teacher_override_replaces_the_final_grade_and_is_released_at_once(): void {
+        $activity = $this->create_activity(['workflowmode' => 'manual', 'manualphase' => 'submission']);
+        [$a] = $this->create_students(1);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->sink->clear();
+
+        $this->assertNull(peerreviewstudio_normalize_teacher_grade_override($activity, '  '));
+        $this->assertEqualsWithDelta(100.0, peerreviewstudio_normalize_teacher_grade_override($activity, '250'), 0.0001);
+        $this->assertEqualsWithDelta(0.0, peerreviewstudio_normalize_teacher_grade_override($activity, '-3'), 0.0001);
+        try {
+            peerreviewstudio_normalize_teacher_grade_override($activity, 'seven');
+            $this->fail('A non-numeric override must be rejected.');
+        } catch (\moodle_exception $e) {
+            $this->assertSame('invalidgradeoverride', $e->errorcode);
+        }
+
+        peerreviewstudio_set_teacher_grade_override($activity, (int)$suba->id, 77.5);
+        $suba = $this->reload($suba);
+        $this->assertEqualsWithDelta(77.5, (float)$suba->finalgrade, 0.0001);
+        $this->assertNull($suba->submissiongrade);
+        $this->assertEqualsWithDelta(77.5, $this->gradebook_grade($activity, (int)$a->id), 0.0001);
+        $this->assertSame(['gradereceived'], $this->notifications_for($a->id));
+
+        // Clearing the override hides the grade again: feedback is not released yet.
+        peerreviewstudio_set_teacher_grade_override($activity, (int)$suba->id, null);
+        $this->assertNull($this->reload($suba)->finalgrade);
+        $this->assertNull($this->gradebook_grade($activity, (int)$a->id));
+    }
+
+    public function test_override_accepts_the_grade_as_the_form_displays_it(): void {
+        $activity = $this->create_activity();
+
+        // The form shows the stored override with format_float(), so whatever
+        // that prints in the user's language must be accepted back.
+        $this->assertEqualsWithDelta(
+            7.5,
+            peerreviewstudio_normalize_teacher_grade_override($activity, format_float(7.5, 2)),
+            0.0001
+        );
+        $this->assertEqualsWithDelta(7.0, peerreviewstudio_normalize_teacher_grade_override($activity, ' 7 '), 0.0001);
+    }
+
+    public function test_ai_grade_blends_with_peers_and_stands_in_when_nobody_reviewed(): void {
+        global $DB;
+
+        $activity = $this->create_activity(['aireviewenabled' => 1, 'aigradeweight' => 25]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+
+        // No review and no fallback: ungraded, even with an AI grade stored.
+        $DB->set_field('peerreviewstudio_submissions', 'aigrade', 60, ['id' => $suba->id]);
+        $this->assertNull(peerreviewstudio_calculate_submission_grade($activity, (int)$suba->id));
+
+        // With the fallback enabled the AI grade stands in for the missing peers.
+        $activity->aifallbackenabled = 1;
+        $this->assertEqualsWithDelta(60.0, peerreviewstudio_calculate_submission_grade($activity, (int)$suba->id), 0.0001);
+
+        // A peer review of 100 arrives: 75% peers + 25% AI.
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->plugingenerator->create_review($activity, $assignment, 3);
+        $this->assertEqualsWithDelta(90.0, peerreviewstudio_calculate_submission_grade($activity, (int)$suba->id), 0.0001);
+
+        // The AI quality assessment scales the reviewer's participation credit.
+        $activity->grademaxreview = 20;
+        $this->assertEqualsWithDelta(20.0, peerreviewstudio_calculate_review_grade($activity, (int)$b->id), 0.0001);
+        $DB->set_field('peerreviewstudio_reviews', 'aireviewergrade', 50, ['reviewerid' => $b->id]);
+        $this->assertEqualsWithDelta(10.0, peerreviewstudio_calculate_review_grade($activity, (int)$b->id), 0.0001);
+    }
+
+    public function test_changing_the_maximum_grade_rescales_stored_grades(): void {
+        global $DB;
+
+        $instance = $this->plugingenerator->create_instance(['course' => $this->course->id]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($instance, $a->id);
+        $this->plugingenerator->create_submission($instance, $b->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->plugingenerator->create_review($instance, $assignment, 1);
+        $this->assertEqualsWithDelta(50.0, (float)$this->reload($suba)->finalgrade, 0.0001);
+
+        // The teacher changes the maximum submission grade from 100 to 10.
+        $data = $this->plugingenerator->get_activity($instance);
+        $data->instance = $data->id;
+        $data->coursemodule = $instance->cmid;
+        $data->grademaxsubmission = 10;
+        $this->setAdminUser();
+        peerreviewstudio_update_instance($data);
+
+        $this->assertEqualsWithDelta(5.0, (float)$DB->get_field('peerreviewstudio_reviews', 'grade', []), 0.0001);
+        $this->assertEqualsWithDelta(5.0, (float)$this->reload($suba)->finalgrade, 0.0001);
+        $activity = $this->plugingenerator->get_activity($instance);
+        $this->assertEqualsWithDelta(5.0, $this->gradebook_grade($activity, (int)$a->id), 0.0001);
+    }
+
+    public function test_followups_remind_once_then_withdraw_and_reassign(): void {
+        global $DB;
+
+        $activity = $this->create_activity(['reviewreminderdays' => 2, 'reviewreassigndays' => 4]);
+        [$a, $b, $c] = $this->create_students(3);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->sink->clear();
+
+        // Nothing happens while the reviewer is within the reminder window.
+        peerreviewstudio_process_review_followups($activity);
+        $this->assertSame([], $this->notifications_for($b->id));
+
+        // Three days of inactivity: one reminder, and only one.
+        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', time() - 3 * DAYSECS, ['id' => $assignment->id]);
+        peerreviewstudio_process_review_followups($activity);
+        peerreviewstudio_process_review_followups($activity);
+        $this->assertSame(['reviewreminder'], $this->notifications_for($b->id));
+
+        // Five days: the review is withdrawn and goes to a new reviewer.
+        $this->plugingenerator->create_submission($activity, $c->id);
+        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', time() - 5 * DAYSECS, ['id' => $assignment->id]);
+        $this->sink->clear();
+        peerreviewstudio_process_review_followups($activity);
+
+        $this->assertSame('cancelled', $DB->get_field('peerreviewstudio_assignments', 'status', ['id' => $assignment->id]));
+        $this->assertContains('reviewwithdrawn', $this->notifications_for($b->id));
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$suba->id, (int)$c->id));
+        $this->assertSame('assigned', $this->reload($suba)->status);
+    }
+
+    public function test_followups_tell_tutors_once_when_nothing_else_can_be_done(): void {
+        global $DB;
+
+        $activity = $this->create_activity();
+        $teacher = $this->getDataGenerator()->create_and_enrol($this->course, 'editingteacher');
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $subb = $this->plugingenerator->create_submission($activity, $b->id);
+
+        // Both submissions already went through three withdrawn reviewers.
+        $DB->set_field('peerreviewstudio_assignments', 'status', 'cancelled', []);
+        foreach ([$suba, $subb] as $submission) {
+            for ($i = 0; $i < 2; $i++) {
+                $DB->insert_record('peerreviewstudio_assignments', (object) [
+                    'peerreviewstudioid' => $activity->id,
+                    'submissionid' => $submission->id,
+                    'reviewerid' => 0,
+                    'status' => 'cancelled',
+                ]);
+            }
+        }
+        $this->sink->clear();
+
+        peerreviewstudio_process_review_followups($activity);
+        peerreviewstudio_process_review_followups($activity);
+
+        // One digest covering both learners, sent once.
+        $this->assertSame(['tutorescalation'], $this->notifications_for($teacher->id));
+        $messages = $this->sink->get_messages();
+        $digest = end($messages);
+        $this->assertStringContainsString(fullname($a), $digest->fullmessage);
+        $this->assertStringContainsString(fullname($b), $digest->fullmessage);
+        $this->assertGreaterThan(0, (int)$this->reload($suba)->timeescalated);
+
+        $incidents = peerreviewstudio_get_tutor_incident_rows($activity);
+        $this->assertCount(2, $incidents);
+        $this->assertSame('escalated', reset($incidents)->incidenttype);
+
+        // A tutor stepping in restarts the automatic cycle for that submission.
+        peerreviewstudio_requeue_submission($activity, (int)$suba->id);
+        $this->assertSame(0, (int)$this->reload($suba)->timeescalated);
+    }
+
+    public function test_followups_clear_open_reviews_after_the_scheduled_deadline(): void {
+        global $DB;
+
+        $activity = $this->create_activity([
+            'workflowmode' => 'scheduled',
+            'timeclose' => time() + HOURSECS,
+            'timereviewdue' => time() + 2 * HOURSECS,
+        ]);
+        $teacher = $this->getDataGenerator()->create_and_enrol($this->course, 'teacher');
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $DB->set_field('peerreviewstudio', 'timeclose', time() - 2 * HOURSECS, ['id' => $activity->id]);
+        peerreviewstudio_process_assignment_queue($this->plugingenerator->get_activity($activity));
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id));
+
+        // Nobody reviewed and the deadline passed.
+        $DB->set_field('peerreviewstudio', 'timereviewdue', time() - HOURSECS, ['id' => $activity->id]);
+        $this->sink->clear();
+        peerreviewstudio_process_review_followups($this->plugingenerator->get_activity($activity));
+
+        $this->assertSame(0, $DB->count_records('peerreviewstudio_assignments', ['status' => 'assigned']));
+        $this->assertSame(['tutorescalation'], $this->notifications_for($teacher->id));
+        $this->assertGreaterThan(0, (int)$this->reload($suba)->timeescalated);
+    }
+
+    public function test_reviewers_matched_before_the_review_phase_are_told_when_it_opens(): void {
+        $instance = $this->plugingenerator->create_instance([
+            'course' => $this->course->id,
+            'workflowmode' => 'manual',
+            'manualphase' => 'submission',
+        ]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($instance, $a->id);
+        $this->plugingenerator->create_submission($instance, $b->id);
+        $this->sink->clear();
+        $this->setAdminUser();
+
+        // Allocation phase: reviewers are matched but cannot start yet.
+        $data = $this->plugingenerator->get_activity($instance);
+        $data->instance = $data->id;
+        $data->coursemodule = $instance->cmid;
+        $data->manualphase = 'allocation';
+        peerreviewstudio_update_instance($data);
+        $this->assertNotFalse($this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id));
+        $this->assertSame([], $this->notifications_for($b->id));
+        $activity = $this->plugingenerator->get_activity($instance);
+        $this->assertSame('nextstep_reviewsoon', peerreviewstudio_learner_next_step($activity, $suba, 1, 0, true));
+
+        // Review phase: each reviewer is told once.
+        $data->manualphase = 'review';
+        peerreviewstudio_update_instance($data);
+        peerreviewstudio_notify_pending_reviewers($this->plugingenerator->get_activity($instance));
+        $this->assertSame(['reviewassigned'], $this->notifications_for($b->id));
+    }
+
+    public function test_dashboard_reports_progress_and_respects_separate_groups(): void {
+        global $DB;
+
+        $activity = $this->create_activity();
+        // Fixed, distinct names: the search below must match exactly one learner.
+        $generator = $this->getDataGenerator();
+        $a = $generator->create_and_enrol($this->course, 'student', ['firstname' => 'Alba', 'lastname' => 'Zuzunaga']);
+        $b = $generator->create_and_enrol($this->course, 'student', ['firstname' => 'Bruno', 'lastname' => 'Quintanilla']);
+        $c = $generator->create_and_enrol($this->course, 'student', ['firstname' => 'Carla', 'lastname' => 'Etxeberria']);
+        $group = $generator->create_group(['courseid' => $this->course->id]);
+        groups_add_member($group, $a);
+
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $this->plugingenerator->create_submission($activity, $c->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->plugingenerator->create_review($activity, $assignment, 3);
+
+        $dashboard = dashboard_service::tutor_dashboard($activity);
+        $this->assertSame(['total' => 3, 'waiting' => 0, 'inreview' => 2, 'complete' => 1], $dashboard['counts']);
+        $this->assertSame(3, $dashboard['total']);
+        $this->assertCount(3, $dashboard['rows']);
+        $row = $dashboard['rows'][$suba->id];
+        $this->assertSame(1, (int)$row->completedcount);
+        $this->assertEqualsWithDelta(100.0, (float)$row->finalgrade, 0.0001);
+
+        // Filters: status, name search, and email search only when allowed.
+        $this->assertCount(1, dashboard_service::tutor_dashboard($activity, 'closed')['rows']);
+        $this->assertCount(1, dashboard_service::tutor_dashboard($activity, '', $a->lastname)['rows']);
+        $this->assertCount(0, dashboard_service::tutor_dashboard($activity, '', $a->email)['rows']);
+        $this->assertCount(1, dashboard_service::tutor_dashboard($activity, '', $a->email, 0, 0, true)['rows']);
+
+        // Group restriction: one group, and nobody at all.
+        $grouped = dashboard_service::tutor_dashboard($activity, '', '', 0, (int)$group->id);
+        $this->assertSame([(int)$suba->id], array_map('intval', array_keys($grouped['rows'])));
+        $this->assertSame(1, $grouped['counts']['total']);
+        $nobody = dashboard_service::tutor_dashboard($activity, '', '', 0, null);
+        $this->assertSame(0, $nobody['total']);
+        $this->assertSame([], $nobody['incidents']);
+
+        // A submission whose author was erased by a privacy request is not listed.
+        $DB->set_field('peerreviewstudio_submissions', 'userid', 0, ['id' => $suba->id]);
+        $this->assertSame(2, dashboard_service::tutor_dashboard($activity)['total']);
     }
 }

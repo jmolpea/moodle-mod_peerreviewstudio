@@ -24,6 +24,10 @@
 
 defined('MOODLE_INTERNAL') || die();
 
+// Only addinstance clones its permissions from another capability. When
+// clonepermissionsfrom is set Moodle copies the permissions of that capability
+// and ignores the archetypes, so the module capabilities below rely on their
+// archetype defaults alone: what this file says is what a new site gets.
 $capabilities = [
     'mod/peerreviewstudio:addinstance' => [
         'riskbitmask' => RISK_XSS,
@@ -44,26 +48,22 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        // No clonepermissionsfrom here on purpose. When it is set, Moodle copies the
-        // permissions of that capability and ignores the archetypes above, and
-        // moodle/course:view is held by managers only: students and teachers were
-        // left without access to the activity.
     ],
     'mod/peerreviewstudio:submit' => [
+        'riskbitmask' => RISK_SPAM,
         'captype' => 'write',
         'contextlevel' => CONTEXT_MODULE,
         'archetypes' => [
             'student' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'mod/assign:submit',
     ],
     'mod/peerreviewstudio:review' => [
+        'riskbitmask' => RISK_SPAM,
         'captype' => 'write',
         'contextlevel' => CONTEXT_MODULE,
         'archetypes' => [
             'student' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'mod/workshop:submit',
     ],
     'mod/peerreviewstudio:viewownstatus' => [
         'captype' => 'read',
@@ -71,7 +71,6 @@ $capabilities = [
         'archetypes' => [
             'student' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'moodle/user:viewdetails',
     ],
     'mod/peerreviewstudio:viewreport' => [
         'riskbitmask' => RISK_PERSONAL,
@@ -82,7 +81,6 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'moodle/course:viewhiddenactivities',
     ],
     'mod/peerreviewstudio:manageassignments' => [
         'riskbitmask' => RISK_PERSONAL,
@@ -93,7 +91,6 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'mod/workshop:allocate',
     ],
     'mod/peerreviewstudio:grade' => [
         'riskbitmask' => RISK_PERSONAL,
@@ -104,7 +101,6 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'moodle/grade:edit',
     ],
     'mod/peerreviewstudio:manageworkflow' => [
         'riskbitmask' => RISK_PERSONAL,
@@ -115,6 +111,5 @@ $capabilities = [
             'editingteacher' => CAP_ALLOW,
             'manager' => CAP_ALLOW,
         ],
-        'clonepermissionsfrom' => 'mod/workshop:switchphase',
     ],
 ];

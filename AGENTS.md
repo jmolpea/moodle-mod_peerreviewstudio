@@ -2,92 +2,69 @@
 
 ## Context
 
-This folder contains the Moodle activity plugin `mod_peerreviewstudio`.
+This folder contains the Moodle activity plugin `mod_peerreviewstudio`
+(Peer Review Studio): learners submit work, review peers with a rubric, and
+receive anonymous feedback and a grade. It supports Moodle 4.5 to 5.3.
 
-Goal of the current state:
-- feature-complete and ready for final Moodle testing
-- not a greenfield MVP anymore
-- focus on code review, risk detection, edge cases, Moodle compliance, and runtime validation gaps
+`README.md` describes the features, `CHANGES.md` the history, and
+`docs/final-testing-checklist.md` the manual validation list.
 
-Recent relevant commits:
-- `a45dc2e` — `feat(peerreviewstudio): finalize submission and review workflow for testing`
-- `9befe43` — `docs(peerreviewstudio): add final testing checklist`
+## Layout
 
-## What is already implemented
+- `view.php`: activity page (learner area and tutor dashboard).
+- `submission.php`: tutor page for one submission, with the tutor actions.
+- `lib.php`: Moodle module callbacks (instances, gradebook, completion,
+  calendar, course reset, file serving).
+- `locallib.php`: workflow phases, rubric, matching, grading, follow-up,
+  notifications, dashboard queries.
+- `classes/local/ai/`: client of the Moodle AI subsystem (core_ai) and
+  submission text reader.
+- `classes/task/`: scheduled matching and follow-up task; AI review tasks.
+- `classes/output/renderer.php`: all HTML output.
+- `classes/privacy/provider.php`, `backup/moodle2/`, `db/`, `lang/`.
+- `tests/`: PHPUnit tests and the data generator.
 
-Core functional scope already present:
-- learner submissions
-- online text submissions
-- file submissions
-- mixed text + file submissions
-- editing submission while submission phase is still open
-- reviewer auto-assignment
-- reciprocal-review avoidance option
-- group-aware reviewer pool modes
-- rubric-based review form
-- tutor dashboard with filters and incidents
-- manual assignment and requeue flows
-- grade calculation and teacher override
-- privacy provider
-- backup/restore scaffolding
-- pluginfile-based secure serving of submission files
+## Rules that are easy to break
 
-## Important practical limitation
+- A submission's `status` is derived from the reviews it received
+  (`peerreviewstudio_derive_submission_status`). Never set it by hand; call
+  `peerreviewstudio_update_submission_status` after changing assignments,
+  reviews, or the queue.
+- Grades reach the gradebook only when feedback is released
+  (`peerreviewstudio_grade_is_released`). A submission with no review has no
+  grade (null), not 0.
+- Reviewers are only matched while `peerreviewstudio_matching_allowed`, and
+  matching runs under a lock (`peerreviewstudio_process_assignment_queue`).
+- Module capabilities must not use `clonepermissionsfrom` (it overrides the
+  archetypes); only `addinstance` does.
+- Every schema change needs an upgrade step, and the upgraded schema must be
+  identical to `db/install.xml`.
+- Every user-facing text is a language string, in English and Spanish, kept
+  in alphabetical order.
+- AI review only goes through the Moodle AI subsystem (`client::instance()`,
+  a core "generate text" action). The plugin has no API key and makes no
+  HTTP request of its own.
+- Content written by a learner is only sent to the AI once that learner has
+  accepted the site AI policy. No names or emails are ever added to it, and
+  it is always wrapped with `client::wrap_untrusted()`.
+- An AI evaluation that was tried and abandoned has `aitimegraded` set and
+  no grade; one that is still waiting has `aitimegraded = 0`.
 
-The current workspace/container did **not** have local `php` available during the final pass, so runtime validation here was limited.
+## Verifying a change
 
-That means your review should pay special attention to:
-- Moodle API correctness
-- PHP syntax/runtime risks
-- form/filemanager handling
-- pluginfile access control
-- gradebook sync correctness
-- privacy API correctness
-- backup/restore completeness
+Syntax checks are not enough: several serious defects in this plugin were
+only found by running the tests inside a real Moodle site.
 
-## Highest-value review targets
+1. `phpcs --standard=moodle --extensions=php .` must report no errors and no
+   warnings.
+2. The PHPDoc checker (`local_moodlecheck`, or `moodle-plugin-ci phpdoc`)
+   must report no errors.
+3. Run the PHPUnit tests in `tests/` inside a Moodle site, on the oldest and
+   newest supported versions at least.
+4. After a schema change, upgrade a site that has the previous version and
+   run `php admin/cli/check_database_schema.php`.
+5. `.github/workflows/ci.yml` runs all of this with moodle-plugin-ci on
+   Moodle 4.5 to 5.3.
 
-Please review these files first:
-- `view.php`
-- `lib.php`
-- `locallib.php`
-- `mod_form.php`
-- `classes/output/renderer.php`
-- `classes/local/form/submission_form.php`
-- `classes/local/form/review_form.php`
-- `classes/privacy/provider.php`
-- `db/install.xml`
-- `db/upgrade.php`
-- `tests/locallib_test.php`
-
-## What to look for
-
-Prioritize findings in this order:
-
-1. fatal errors or obvious runtime breakage
-2. Moodle API misuse
-3. security/privacy/access control issues
-4. file handling bugs
-5. grading inconsistencies
-6. workflow/state-transition bugs
-7. edge cases in assignment/requeue/review completion
-8. test gaps and maintainability concerns
-
-## Expected output format
-
-When reviewing, prefer a concrete report with:
-- severity
-- file
-- exact issue
-- why it matters
-- suggested fix
-
-If possible, separate:
-- blockers before testing
-- important but non-blocking issues
-- nice-to-have refactors
-
-## Final testing reference
-
-Use this checklist as the intended validation target:
-- `docs/final-testing-checklist.md`
+When reviewing, report findings with severity, file, the exact issue, why it
+matters, and a suggested fix, separating blockers from the rest.
