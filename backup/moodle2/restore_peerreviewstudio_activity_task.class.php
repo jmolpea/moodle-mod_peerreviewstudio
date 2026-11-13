@@ -73,4 +73,27 @@ class restore_peerreviewstudio_activity_task extends restore_activity_task {
             new restore_decode_rule('PEERREVIEWSTUDIOINDEX', '/mod/peerreviewstudio/index.php?id=$1', 'course'),
         ];
     }
+
+    /**
+     * Define the restore log rules for the activity.
+     *
+     * The plugin only writes to the standard log store, which core restores
+     * without module-specific rules, so there is nothing to map here. The
+     * method must still exist: the base class throws when it is missing and
+     * a course is restored with its logs.
+     *
+     * @return restore_log_rule[]
+     */
+    public static function define_restore_log_rules() {
+        return [];
+    }
+
+    /**
+     * Define the restore log rules for course-level logs of the activity.
+     *
+     * @return restore_log_rule[]
+     */
+    public static function define_restore_log_rules_for_course() {
+        return [];
+    }
 }

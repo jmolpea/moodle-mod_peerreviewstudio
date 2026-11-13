@@ -1,0 +1,12 @@
+# Files that are part of the repository but not of the distributed plugin
+# package (git archive leaves them out).
+/.github export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/AGENTS.md export-ignore
+/CLAUDE.md export-ignore
+/docs export-ignore
+# Moodle Marketplace packages carry English strings only; translations are
+# published through AMOS (lang.moodle.org). The Spanish strings stay in the
+# repository as the source for that.
+/lang/es export-ignore

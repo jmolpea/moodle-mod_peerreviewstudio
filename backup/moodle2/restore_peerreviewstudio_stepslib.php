@@ -41,17 +41,23 @@ class restore_peerreviewstudio_activity_structure_step extends restore_activity_
         $assignmentpath = $submissionpath . '/assignments/assignment';
         $reviewpath = $assignmentpath . '/reviews/review';
 
-        return [
+        $paths = [
             new restore_path_element('peerreviewstudio', '/activity/peerreviewstudio'),
             new restore_path_element('peerreviewstudio_rubric', $rubricpath),
             new restore_path_element('peerreviewstudio_criterion', $rubricpath . '/criteria/criterion'),
             new restore_path_element('peerreviewstudio_level', $rubricpath . '/criteria/criterion/levels/level'),
-            new restore_path_element('peerreviewstudio_submission', $submissionpath),
-            new restore_path_element('peerreviewstudio_assignment', $assignmentpath),
-            new restore_path_element('peerreviewstudio_review', $reviewpath),
-            new restore_path_element('peerreviewstudio_answer', $reviewpath . '/answers/answer'),
-            new restore_path_element('peerreviewstudio_queueitem', $submissionpath . '/queueitems/queueitem'),
         ];
+
+        // Learner data is only restored when user information is included.
+        if ($this->get_setting_value('userinfo')) {
+            $paths[] = new restore_path_element('peerreviewstudio_submission', $submissionpath);
+            $paths[] = new restore_path_element('peerreviewstudio_assignment', $assignmentpath);
+            $paths[] = new restore_path_element('peerreviewstudio_review', $reviewpath);
+            $paths[] = new restore_path_element('peerreviewstudio_answer', $reviewpath . '/answers/answer');
+            $paths[] = new restore_path_element('peerreviewstudio_queueitem', $submissionpath . '/queueitems/queueitem');
+        }
+
+        return $this->prepare_activity_structure($paths);
     }
 
     /**
@@ -66,6 +72,12 @@ class restore_peerreviewstudio_activity_structure_step extends restore_activity_
         $data = (object)$data;
         $oldid = $data->id;
         $data->course = $this->get_courseid();
+        // The same dates are rolled forward by a course reset.
+        foreach (['timeopen', 'timeclose', 'timereviewdue'] as $datefield) {
+            $data->{$datefield} = $this->apply_date_offset($data->{$datefield} ?? 0);
+        }
+        // The restored activity releases its feedback again when due.
+        $data->timegradesreleased = 0;
         $newitemid = $DB->insert_record('peerreviewstudio', $data);
         $this->apply_activity_instance($newitemid);
         $this->set_mapping('peerreviewstudio', $oldid, $newitemid);
@@ -148,7 +160,7 @@ class restore_peerreviewstudio_activity_structure_step extends restore_activity_
 
         $data = (object)$data;
         $oldid = $data->id;
-        $data->peerreviewstudioid = $this->get_new_parentid('peerreviewstudio');
+        $data->peerreviewstudioid = $this->task->get_activityid();
         $data->submissionid = $this->get_new_parentid('peerreviewstudio_submission');
         $data->reviewerid = $this->get_mappingid('user', $data->reviewerid, 0);
         $newitemid = $DB->insert_record('peerreviewstudio_assignments', $data);
@@ -202,7 +214,7 @@ class restore_peerreviewstudio_activity_structure_step extends restore_activity_
 
         $data = (object)$data;
         $oldid = $data->id;
-        $data->peerreviewstudioid = $this->get_new_parentid('peerreviewstudio');
+        $data->peerreviewstudioid = $this->task->get_activityid();
         $data->submissionid = $this->get_new_parentid('peerreviewstudio_submission');
         $newitemid = $DB->insert_record('peerreviewstudio_queue', $data);
         $this->set_mapping('peerreviewstudio_queueitem', $oldid, $newitemid);

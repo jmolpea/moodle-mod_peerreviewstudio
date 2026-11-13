@@ -15,7 +15,11 @@
 // along with Moodle.  If not, see <https://www.gnu.org/licenses/>.
 
 /**
- * Admin settings for mod_peerreviewstudio (AI review provider).
+ * Admin settings for mod_peerreviewstudio.
+ *
+ * AI review uses the site's AI providers, so there is nothing to configure
+ * here: the page says whether AI review is available and links to the
+ * places where it is set up and tested.
  *
  * @package     mod_peerreviewstudio
  * @copyright   2026 Julio Molpeceres
@@ -25,81 +29,17 @@
 defined('MOODLE_INTERNAL') || die();
 
 if ($ADMIN->fulltree) {
+    $available = \mod_peerreviewstudio\local\ai\client::instance()->is_available();
+    $links = (object) [
+        'providers' => (new moodle_url('/admin/settings.php', ['section' => 'aiprovider']))->out(),
+        'test' => (new moodle_url('/mod/peerreviewstudio/aitest.php'))->out(),
+    ];
+
     $settings->add(new admin_setting_heading(
         'mod_peerreviewstudio/aiheading',
         get_string('setting_aiheading', 'mod_peerreviewstudio'),
-        get_string('setting_aiheading_desc', 'mod_peerreviewstudio')
-    ));
-
-    $settings->add(new admin_setting_configselect(
-        'mod_peerreviewstudio/aiprovider',
-        get_string('setting_aiprovider', 'mod_peerreviewstudio'),
-        get_string('setting_aiprovider_desc', 'mod_peerreviewstudio'),
-        '',
-        [
-            '' => get_string('setting_aiprovider_none', 'mod_peerreviewstudio'),
-            'openai' => 'OpenAI',
-            'anthropic' => 'Anthropic',
-            'gemini' => 'Google Gemini',
-            'deepseek' => 'DeepSeek',
-        ]
-    ));
-
-    $settings->add(new admin_setting_configpasswordunmask(
-        'mod_peerreviewstudio/aiapikey',
-        get_string('setting_aiapikey', 'mod_peerreviewstudio'),
-        get_string('setting_aiapikey_desc', 'mod_peerreviewstudio'),
-        ''
-    ));
-
-    // One model list per provider: only the list for the selected provider
-    // is used, so switching providers keeps each provider's model choice.
-    $settings->add(new admin_setting_configselect(
-        'mod_peerreviewstudio/aimodel_openai',
-        get_string('setting_aimodel', 'mod_peerreviewstudio', 'OpenAI'),
-        get_string('setting_aimodel_desc', 'mod_peerreviewstudio'),
-        'gpt-4o-mini',
-        [
-            'gpt-4o-mini' => 'gpt-4o-mini',
-            'gpt-4o' => 'gpt-4o',
-            'gpt-4.1-mini' => 'gpt-4.1-mini',
-            'gpt-4.1' => 'gpt-4.1',
-            'gpt-5.1' => 'gpt-5.1',
-        ]
-    ));
-
-    $settings->add(new admin_setting_configselect(
-        'mod_peerreviewstudio/aimodel_anthropic',
-        get_string('setting_aimodel', 'mod_peerreviewstudio', 'Anthropic'),
-        get_string('setting_aimodel_desc', 'mod_peerreviewstudio'),
-        'claude-haiku-4-5-20251001',
-        [
-            'claude-haiku-4-5-20251001' => 'Claude Haiku 4.5',
-            'claude-sonnet-5' => 'Claude Sonnet 5',
-            'claude-opus-4-8' => 'Claude Opus 4.8',
-        ]
-    ));
-
-    $settings->add(new admin_setting_configselect(
-        'mod_peerreviewstudio/aimodel_gemini',
-        get_string('setting_aimodel', 'mod_peerreviewstudio', 'Google Gemini'),
-        get_string('setting_aimodel_desc', 'mod_peerreviewstudio'),
-        'gemini-2.5-flash',
-        [
-            'gemini-2.5-flash' => 'gemini-2.5-flash',
-            'gemini-2.5-pro' => 'gemini-2.5-pro',
-            'gemini-2.0-flash' => 'gemini-2.0-flash',
-        ]
-    ));
-
-    $settings->add(new admin_setting_configselect(
-        'mod_peerreviewstudio/aimodel_deepseek',
-        get_string('setting_aimodel', 'mod_peerreviewstudio', 'DeepSeek'),
-        get_string('setting_aimodel_desc', 'mod_peerreviewstudio'),
-        'deepseek-chat',
-        [
-            'deepseek-chat' => 'deepseek-chat',
-            'deepseek-reasoner' => 'deepseek-reasoner',
-        ]
+        get_string('setting_aiheading_desc', 'mod_peerreviewstudio', $links)
+            . html_writer::empty_tag('br') . html_writer::empty_tag('br')
+            . get_string($available ? 'setting_aistatus_available' : 'setting_aistatus_unavailable', 'mod_peerreviewstudio', $links)
     ));
 }

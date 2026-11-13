@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Peer Review Studio: Moodle Marketplace description</title>
+</head>
+<body>
+<!-- Open this file in a browser, select everything, and paste it into the Description field
+     (Edit plugin page > Description). The field accepts up to 7,000 characters of rich text. -->
+<p>Peer Review Studio is an activity for structured peer review. Each learner submits a piece of work, reviews the work of classmates with a rubric the teacher defines, and receives anonymous feedback and a grade. The activity matches reviewers, chases the ones who do not review, and tells the teacher only when someone has to step in.</p>
+
+<h3>Who it is for</h3>
+<p>Teachers who want learners to give each other useful feedback without spending their own time pairing people, sending reminders, and collecting results. It works in a tutored course with deadlines and in a self-paced course with no teacher online.</p>
+
+<h3>Main features</h3>
+<ul>
+<li><strong>Submissions</strong>: online text, files, or both. A submission is frozen once it is matched with reviewers, so everyone reviews the work the author is graded on.</li>
+<li><strong>Three ways to run it</strong>: scheduled (submit until a date, review until another, then feedback is released), manual (the teacher changes phase), or open, where learners move at their own pace and get feedback as soon as their reviews are in.</li>
+<li><strong>Automatic reviewer matching</strong>: spreads the reviewing load evenly, only uses active participants, never repeats a reviewer on the same work, and can keep reviewers inside or outside the author's group.</li>
+<li><strong>Rubric reviews</strong>: up to 5 weighted criteria with 2 to 4 levels, a comment per criterion, and an overall comment. The rubric produces the grade each review proposes.</li>
+<li><strong>Anonymous feedback</strong>: authors read the rubric answers and comments, never who wrote them.</li>
+<li><strong>Automatic follow-up</strong>: reminders to reviewers who have not started, replacement of reviewers who do not respond, and one message to the teachers when a submission is left without a review.</li>
+<li><strong>Tutor dashboard</strong>: progress per participant, filters, group selector, and a "needs attention" list. Each submission has its own page with the work, every review, the grade breakdown, and the actions: assign a reviewer by hand, match again, or set the final grade.</li>
+<li><strong>Grading</strong>: the submission grade is the average of the grades proposed by the reviews received, plus an optional grade for completing the required reviews. Grades reach the gradebook together with the feedback. Grade category, grade to pass, and teacher override are supported.</li>
+<li><strong>Standard activity behaviour</strong>: completion rules (submit; complete the required reviews), calendar and timeline deadlines, notifications, groups and groupings, course reset, backup and restore with user data, events, and the Privacy API.</li>
+</ul>
+
+<h3>Optional AI second review</h3>
+<p>A teacher can ask for an AI second opinion in an activity. The AI grades each submission (blended with the peer grade by a weight the teacher sets) and assesses the quality of each review. It can also grade a submission that nobody reviewed, so no learner is left without feedback.</p>
+<ul>
+<li><strong>It uses the AI subsystem of the site.</strong> The plugin has no API key or model of its own and calls no external service itself: it asks the site for a "Generate text" action. The provider and the model are the ones the administrator set up in Site administration &gt; General &gt; AI &gt; AI providers, and the site's rate limits and AI usage reports apply.</li>
+<li><strong>What you need</strong>: an AI provider enabled in the site. Depending on the provider, the institution needs its own account or API key with that provider, obtained from the provider and entered in the AI providers page of the site. Nothing is paid to the plugin author, and nothing has to be configured in the plugin.</li>
+<li><strong>Without an AI provider</strong> everything else works. Only the AI second review is unavailable, and the activity settings say so.</li>
+<li><strong>What is sent</strong>: the activity name, description and rubric, the text of the submission (online text, plain-text files, .docx and .odt documents), and the rubric answers and comments of the review. The plugin never adds names or emails. Submissions that contain other file types, such as PDF or images, are not graded by the AI.</li>
+<li><strong>Consent</strong>: a learner's work is only sent once that learner has accepted the AI policy of the site, which they can read and accept in the activity. Until then their work is reviewed by peers only. The "AI tools" course setting is respected.</li>
+</ul>
+
+<h3>Personal data</h3>
+<p>The plugin stores each learner's submission and files, the reviews they write (rubric answers, comments, proposed grade), their grades, and the dates of each step. It implements the Privacy API: data can be exported and deleted on request. Deleting a reviewer removes their identity and comments but keeps the proposed grade, so the grades of other learners do not change.</p>
+
+<h3>Requirements and installation</h3>
+<ul>
+<li>Moodle 4.5, 5.0, 5.1, 5.2, or 5.3. Tested on PostgreSQL and MariaDB.</li>
+<li>Cron must be running: reviewer matching in scheduled mode, reminders, and the release of feedback happen in a scheduled task.</li>
+<li>Install the ZIP from Site administration &gt; Plugins &gt; Install plugins. There are no other steps and no dependencies on other plugins.</li>
+</ul>
+
+<h3>Getting started</h3>
+<ol>
+<li>Add a Peer Review Studio activity to a course and choose what learners submit.</li>
+<li>Choose how to run it. Scheduled mode needs two dates: when submissions close and when reviews are due.</li>
+<li>Set how many reviews each learner writes and how many each submission receives (2 and 2 by default), and adjust the rubric.</li>
+<li>Learners submit, review the work assigned to them, and read their feedback. You follow everything from the dashboard.</li>
+</ol>
+
+<h3>Documentation and support</h3>
+<p>The <a href="https://github.com/jmolpea/moodle-mod_peerreviewstudio#readme">user and administrator guide</a> explains the grading model, the capabilities, and the AI review in detail. Report problems and suggest improvements in the <a href="https://github.com/jmolpea/moodle-mod_peerreviewstudio/issues">issue tracker</a>.</p>
+
+<h3>Licence</h3>
+<p>GNU GPL v3 or later.</p>
+</body>
+</html>

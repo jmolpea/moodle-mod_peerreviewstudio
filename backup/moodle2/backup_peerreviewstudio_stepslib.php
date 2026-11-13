@@ -44,7 +44,7 @@ class backup_peerreviewstudio_activity_structure_step extends backup_activity_st
             'grademaxsubmission', 'grademaxreview',
             'timeopen', 'timeclose', 'timereviewdue', 'workflowmode', 'manualphase',
             'aireviewenabled', 'aifallbackenabled', 'aigradeweight', 'aipromptsubmission', 'aipromptreviewer',
-            'timecreated', 'timemodified',
+            'completionsubmit', 'completionreviews', 'timecreated', 'timemodified',
         ]);
         $rubrics = new backup_nested_element('rubrics');
         $rubric = new backup_nested_element('rubric', ['id'], ['name', 'timecreated', 'timemodified']);
@@ -56,11 +56,12 @@ class backup_peerreviewstudio_activity_structure_step extends backup_activity_st
         $submission = new backup_nested_element('submission', ['id'], [
             'userid', 'status', 'onlinetext', 'onlinetextformat', 'timesubmitted', 'timecreated', 'timemodified',
             'submissiongrade', 'reviewgrade', 'finalgrade', 'teachergradeoverride',
-            'aigrade', 'aifeedback', 'aitimegraded', 'timeescalated',
+            'aigrade', 'aifeedback', 'aitimegraded', 'timeescalated', 'timegradenotified',
         ]);
         $assignments = new backup_nested_element('assignments');
         $assignment = new backup_nested_element('assignment', ['id'], [
-            'reviewerid', 'status', 'timeassigned', 'timereminded', 'timeopened', 'timecompleted', 'timemodified',
+            'reviewerid', 'status', 'timeassigned', 'timenotified', 'timereminded', 'timeopened', 'timecompleted',
+            'timemodified',
         ]);
         $reviews = new backup_nested_element('reviews');
         $review = new backup_nested_element('review', ['id'], [
@@ -109,8 +110,6 @@ class backup_peerreviewstudio_activity_structure_step extends backup_activity_st
         $submission->annotate_ids('user', 'userid');
         $assignment->annotate_ids('user', 'reviewerid');
         $review->annotate_ids('user', 'reviewerid');
-        $answer->annotate_ids('peerreviewstudio_criterion', 'criterionid');
-        $answer->annotate_ids('peerreviewstudio_level', 'levelid');
 
         $peerreviewstudio->annotate_files('mod_peerreviewstudio', 'intro', null);
         if ($userinfo) {

@@ -22,10 +22,6 @@
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 
-defined('MOODLE_INTERNAL') || die();
-
-require_once(__DIR__ . '/../../group/lib.php');
-
 /**
  * Maximum number of files accepted per submission.
  */
@@ -35,6 +31,18 @@ const PEERREVIEWSTUDIO_MAXFILES = 20;
  * Maximum automatic reassignments per submission before escalating.
  */
 const PEERREVIEWSTUDIO_MAX_AUTO_REASSIGNMENTS = 3;
+
+/**
+ * Maximum incident rows shown on the tutor dashboard per load.
+ */
+const PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS = 20;
+
+/**
+ * Maximum number of learner names listed in one tutor escalation digest.
+ */
+const PEERREVIEWSTUDIO_MAX_ESCALATION_NAMES = 10;
+
+// Context, options and labels.
 
 /**
  * Resolve the module context for one activity.
@@ -61,50 +69,15 @@ function peerreviewstudio_submission_type_options(): array {
 }
 
 /**
- * Return a default rubric definition preview for author guidance.
- *
- * @return string
- */
-function peerreviewstudio_default_rubric_preview(): string {
-    $lines = [];
-    foreach (peerreviewstudio_default_rubric_definition() as $criterion) {
-        $lines[] = '- ' . $criterion['label'];
-    }
-    return implode("\n", $lines);
-}
-
-/**
- * Return the default structured rubric definition.
+ * Return the reviewer pool mode options.
  *
  * @return array
  */
-function peerreviewstudio_default_rubric_definition(): array {
-    $levels = [
-        ['label' => get_string('defaultrubric_level1', 'mod_peerreviewstudio'), 'score' => 1],
-        ['label' => get_string('defaultrubric_level2', 'mod_peerreviewstudio'), 'score' => 2],
-        ['label' => get_string('defaultrubric_level3', 'mod_peerreviewstudio'), 'score' => 3],
-        ['label' => get_string('defaultrubric_level4', 'mod_peerreviewstudio'), 'score' => 4],
-    ];
-
+function peerreviewstudio_review_pool_options(): array {
     return [
-        [
-            'label' => get_string('defaultrubric_criterion1', 'mod_peerreviewstudio'),
-            'description' => get_string('defaultrubric_criterion1_desc', 'mod_peerreviewstudio'),
-            'weight' => 1,
-            'levels' => $levels,
-        ],
-        [
-            'label' => get_string('defaultrubric_criterion2', 'mod_peerreviewstudio'),
-            'description' => get_string('defaultrubric_criterion2_desc', 'mod_peerreviewstudio'),
-            'weight' => 1,
-            'levels' => $levels,
-        ],
-        [
-            'label' => get_string('defaultrubric_criterion3', 'mod_peerreviewstudio'),
-            'description' => get_string('defaultrubric_criterion3_desc', 'mod_peerreviewstudio'),
-            'weight' => 1,
-            'levels' => $levels,
-        ],
+        'any' => get_string('reviewpoolmode_any', 'mod_peerreviewstudio'),
+        'samegroup' => get_string('reviewpoolmode_samegroup', 'mod_peerreviewstudio'),
+        'differentgroup' => get_string('reviewpoolmode_differentgroup', 'mod_peerreviewstudio'),
     ];
 }
 
@@ -122,126 +95,6 @@ function peerreviewstudio_workflow_mode_options(): array {
 }
 
 /**
- * Return group ids for a user in one course module course.
- *
- * @param stdClass $course Course record.
- * @param int $userid User id.
- * @return int[]
- */
-function peerreviewstudio_get_user_group_ids(stdClass $course, int $userid): array {
-    $groups = groups_get_all_groups((int)$course->id, $userid);
-    return array_map('intval', array_keys($groups ?: []));
-}
-
-/**
- * Return eligibility result for one candidate reviewer.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $submission Submission record.
- * @param stdClass $candidate Candidate submission row.
- * @param int[] $authorgroups Author group ids.
- * @return array{eligible:bool,reasons:array}
- */
-function peerreviewstudio_evaluate_reviewer_candidate(
-    stdClass $activity,
-    stdClass $submission,
-    stdClass $candidate,
-    array $authorgroups
-): array {
-    global $DB;
-
-    $reasons = [];
-    if ((int)$candidate->userid === (int)$submission->userid) {
-        $reasons[] = 'self';
-    }
-
-    $activestatuses = ['submitted', 'queued', 'assigned', 'partiallyreviewed', 'reviewed', 'closed'];
-    if (!in_array((string)$candidate->status, $activestatuses, true)) {
-        $reasons[] = 'candidateinactive';
-    }
-
-    $alreadyassigned = $DB->record_exists('peerreviewstudio_assignments', [
-        'submissionid' => $submission->id,
-        'reviewerid' => $candidate->userid,
-    ]);
-    if ($alreadyassigned) {
-        $reasons[] = 'alreadyassigned';
-    }
-
-    if (!empty($activity->avoidreciprocalreviews) && $DB->record_exists('peerreviewstudio_assignments', [
-        'peerreviewstudioid' => $activity->id,
-        'submissionid' => $candidate->id,
-        'reviewerid' => $submission->userid,
-    ])) {
-        $reasons[] = 'reciprocal';
-    }
-
-    $poolmode = (string)($activity->reviewpoolmode ?? 'any');
-    if ($poolmode !== 'any') {
-        $candidategroups = peerreviewstudio_get_user_group_ids((object)['id' => $activity->course], (int)$candidate->userid);
-        $shared = array_intersect($authorgroups, $candidategroups);
-        if ($poolmode === 'samegroup' && !$shared) {
-            $reasons[] = 'groupmismatch';
-        }
-        if ($poolmode === 'differentgroup' && $shared) {
-            $reasons[] = 'samegroupblocked';
-        }
-    }
-
-    return ['eligible' => !$reasons, 'reasons' => $reasons];
-}
-
-/**
- * Human-readable reason labels for ineligible reviewer candidates.
- *
- * @param array $reasons Reason keys.
- * @return string[]
- */
-function peerreviewstudio_eligibility_reason_labels(array $reasons): array {
-    $labels = [];
-    foreach ($reasons as $reason) {
-        $key = 'eligibilityreason_' . $reason;
-        if (get_string_manager()->string_exists($key, 'mod_peerreviewstudio')) {
-            $labels[] = get_string($key, 'mod_peerreviewstudio');
-        } else {
-            $labels[] = $reason;
-        }
-    }
-    return $labels;
-}
-
-/**
- * Summarise blocked candidate reasons for tutor dashboards.
- *
- * @param array $candidates Ineligible candidate rows.
- * @return string
- */
-function peerreviewstudio_ineligible_candidates_summary(array $candidates): string {
-    $reasoncounts = [];
-    foreach ($candidates as $candidate) {
-        foreach (($candidate->reasonlabels ?? []) as $label) {
-            $label = (string)$label;
-            $reasoncounts[$label] = ($reasoncounts[$label] ?? 0) + 1;
-        }
-    }
-
-    if (!$reasoncounts) {
-        return '';
-    }
-
-    arsort($reasoncounts);
-    $parts = [];
-    foreach ($reasoncounts as $label => $count) {
-        $parts[] = $label . ' (' . $count . ')';
-        if (count($parts) >= 3) {
-            break;
-        }
-    }
-
-    return implode(', ', $parts);
-}
-
-/**
  * Workflow phase options.
  *
  * @return array
@@ -255,6 +108,36 @@ function peerreviewstudio_workflow_phase_options(): array {
         'closed' => get_string('phase_closed', 'mod_peerreviewstudio'),
     ];
 }
+
+/**
+ * Submission statuses, in workflow order.
+ *
+ * The status only describes the submission itself (how far it is from
+ * having received its target number of reviews). The reviewing work its
+ * author does for others is tracked through the assignments table.
+ *
+ * @return string[]
+ */
+function peerreviewstudio_submission_statuses(): array {
+    return ['submitted', 'queued', 'assigned', 'partiallyreviewed', 'closed'];
+}
+
+/**
+ * Return a human-readable status label.
+ *
+ * @param string $status Raw status.
+ * @return string
+ */
+function peerreviewstudio_status_label(string $status): string {
+    $statuskey = 'status_' . clean_param($status, PARAM_ALPHANUMEXT);
+    if (get_string_manager()->string_exists($statuskey, 'mod_peerreviewstudio')) {
+        return get_string($statuskey, 'mod_peerreviewstudio');
+    }
+
+    return s($status);
+}
+
+// Workflow phases.
 
 /**
  * Return current workflow phase for one activity.
@@ -279,50 +162,74 @@ function peerreviewstudio_get_current_phase(stdClass $activity): string {
     }
 
     $now = time();
-    $timeopen = (int)($activity->timeopen ?? 0);
     $timeclose = (int)($activity->timeclose ?? 0);
     $timereviewdue = (int)($activity->timereviewdue ?? 0);
 
-    if ($timeopen && $now < $timeopen) {
-        return 'submission';
-    }
     if (!$timeclose || $now <= $timeclose) {
         return 'submission';
     }
-    if ($timeclose && $now > $timeclose && (!$timereviewdue || $now <= $timereviewdue)) {
+    if (!$timereviewdue || $now <= $timereviewdue) {
         return 'review';
     }
-    if ($timereviewdue && $now > $timereviewdue) {
-        return 'feedback';
-    }
 
-    return 'closed';
+    return 'feedback';
 }
 
 /**
- * Whether the current phase allows submissions.
+ * Whether learners may submit or edit work right now.
  *
  * Open mode never closes submissions: a rolling, self-paced activity
- * (e.g. an OER course) must accept work at any time, regardless of the
- * calendar.
+ * (e.g. an OER course) must accept work at any time. Scheduled mode also
+ * honours the optional opening date; manual mode ignores every date.
  *
  * @param stdClass $activity Activity record.
  * @return bool
  */
 function peerreviewstudio_phase_allows_submissions(stdClass $activity): bool {
-    if ((string)($activity->workflowmode ?? 'scheduled') === 'open') {
+    $mode = (string)($activity->workflowmode ?? 'scheduled');
+    if ($mode === 'open') {
         return true;
     }
-    return peerreviewstudio_get_current_phase($activity) === 'submission';
+    if (peerreviewstudio_get_current_phase($activity) !== 'submission') {
+        return false;
+    }
+    if ($mode === 'scheduled' && !empty($activity->timeopen) && time() < (int)$activity->timeopen) {
+        return false;
+    }
+
+    return true;
 }
 
 /**
- * Whether the current phase allows reviews.
+ * Whether reviewers may be matched to submissions right now.
+ *
+ * Open mode matches continuously. Scheduled mode waits until submissions
+ * close, so every submission takes part in the matching and reviewers are
+ * only told about work they can actually start. Manual mode matches during
+ * the allocation and review phases.
+ *
+ * @param stdClass $activity Activity record.
+ * @return bool
+ */
+function peerreviewstudio_matching_allowed(stdClass $activity): bool {
+    $mode = (string)($activity->workflowmode ?? 'scheduled');
+    if ($mode === 'open') {
+        return true;
+    }
+    $phase = peerreviewstudio_get_current_phase($activity);
+    if ($mode === 'manual') {
+        return in_array($phase, ['allocation', 'review'], true);
+    }
+
+    return $phase === 'review';
+}
+
+/**
+ * Whether the current phase allows reviewing.
  *
  * Open mode always allows reviewing: whether a specific learner actually
- * has something to review is already decided by whether they hold an
- * 'assigned' assignment (checked separately by the caller), not by a
- * shared activity-wide phase.
+ * has something to review is decided by whether they hold an 'assigned'
+ * assignment, not by a shared activity-wide phase.
  *
  * @param stdClass $activity Activity record.
  * @return bool
@@ -331,7 +238,7 @@ function peerreviewstudio_phase_allows_reviews(stdClass $activity): bool {
     if ((string)($activity->workflowmode ?? 'scheduled') === 'open') {
         return true;
     }
-    return in_array(peerreviewstudio_get_current_phase($activity), ['allocation', 'review'], true);
+    return peerreviewstudio_get_current_phase($activity) === 'review';
 }
 
 /**
@@ -351,20 +258,6 @@ function peerreviewstudio_phase_allows_feedback(stdClass $activity, ?stdClass $s
         return $submission !== null && (string)$submission->status === 'closed';
     }
     return in_array(peerreviewstudio_get_current_phase($activity), ['feedback', 'closed'], true);
-}
-
-/**
- * Return a phase label.
- *
- * @param string $phase Phase key.
- * @return string
- */
-function peerreviewstudio_phase_label(string $phase): string {
-    if ($phase === 'ongoing') {
-        return get_string('phase_ongoing', 'mod_peerreviewstudio');
-    }
-    $options = peerreviewstudio_workflow_phase_options();
-    return $options[$phase] ?? $phase;
 }
 
 /**
@@ -390,6 +283,54 @@ function peerreviewstudio_visible_workflow_phases(stdClass $activity): array {
     }
 
     return $options;
+}
+
+/**
+ * Whether the review window is definitively over for one activity.
+ *
+ * Only scheduled mode has an irreversible review deadline. Manual mode
+ * phases can be moved back by the teacher and open mode never ends, so
+ * neither is treated as "over": their unresolved reviews are handled by
+ * the inactivity clocks instead.
+ *
+ * @param stdClass $activity Activity record.
+ * @return bool
+ */
+function peerreviewstudio_review_window_over(stdClass $activity): bool {
+    if ((string)($activity->workflowmode ?? 'scheduled') !== 'scheduled') {
+        return false;
+    }
+    $due = (int)($activity->timereviewdue ?? 0);
+
+    return $due > 0 && time() > $due;
+}
+
+// Rubric.
+
+/**
+ * Return the default structured rubric definition.
+ *
+ * @return array
+ */
+function peerreviewstudio_default_rubric_definition(): array {
+    $levels = [
+        ['label' => get_string('defaultrubric_level1', 'mod_peerreviewstudio'), 'score' => 1],
+        ['label' => get_string('defaultrubric_level2', 'mod_peerreviewstudio'), 'score' => 2],
+        ['label' => get_string('defaultrubric_level3', 'mod_peerreviewstudio'), 'score' => 3],
+        ['label' => get_string('defaultrubric_level4', 'mod_peerreviewstudio'), 'score' => 4],
+    ];
+
+    $definition = [];
+    foreach ([1, 2, 3] as $number) {
+        $definition[] = [
+            'label' => get_string('defaultrubric_criterion' . $number, 'mod_peerreviewstudio'),
+            'description' => get_string('defaultrubric_criterion' . $number . '_desc', 'mod_peerreviewstudio'),
+            'weight' => 1,
+            'levels' => $levels,
+        ];
+    }
+
+    return $definition;
 }
 
 /**
@@ -457,50 +398,6 @@ function peerreviewstudio_extract_rubric_definition_from_form(array $data): arra
 }
 
 /**
- * Ensure the activity has at least one minimal rubric.
- *
- * @param int $activityid Activity id.
- * @return void
- */
-function peerreviewstudio_ensure_default_rubric(int $activityid): void {
-    global $DB;
-
-    if ($DB->record_exists('peerreviewstudio_rubrics', ['peerreviewstudioid' => $activityid])) {
-        return;
-    }
-
-    $now = time();
-    $rubric = (object) [
-        'peerreviewstudioid' => $activityid,
-        'name' => get_string('defaultrubricname', 'mod_peerreviewstudio'),
-        'timecreated' => $now,
-        'timemodified' => $now,
-    ];
-    $rubricid = $DB->insert_record('peerreviewstudio_rubrics', $rubric);
-
-    foreach (peerreviewstudio_default_rubric_definition() as $criterionindex => $criterion) {
-        $criterionrecord = (object) [
-            'rubricid' => $rubricid,
-            'label' => $criterion['label'],
-            'description' => $criterion['description'],
-            'weight' => (float)$criterion['weight'],
-            'sortorder' => $criterionindex,
-        ];
-        $criterionid = $DB->insert_record('peerreviewstudio_r_criteria', $criterionrecord);
-
-        foreach ($criterion['levels'] as $levelindex => $level) {
-            $levelrecord = (object) [
-                'criterionid' => $criterionid,
-                'label' => $level['label'],
-                'score' => (float)$level['score'],
-                'sortorder' => $levelindex,
-            ];
-            $DB->insert_record('peerreviewstudio_r_levels', $levelrecord);
-        }
-    }
-}
-
-/**
  * Whether any rubric answers already exist for one activity.
  *
  * @param int $activityid Activity id.
@@ -556,8 +453,7 @@ function peerreviewstudio_sync_activity_rubric(int $activityid, array $definitio
         ];
         $rubric->id = $DB->insert_record('peerreviewstudio_rubrics', $rubric);
     } else {
-        $rubric->timemodified = $now;
-        $DB->update_record('peerreviewstudio_rubrics', $rubric);
+        $DB->set_field('peerreviewstudio_rubrics', 'timemodified', $now, ['id' => $rubric->id]);
     }
 
     $existingcriteria = array_values(
@@ -621,7 +517,11 @@ function peerreviewstudio_sync_activity_rubric(int $activityid, array $definitio
 }
 
 /**
- * Return the minimal rubric structure for one activity.
+ * Return the rubric structure for one activity.
+ *
+ * An activity that somehow has no rubric yet (for example one restored
+ * from an incomplete backup) gets the default rubric first, so reviewing
+ * never breaks.
  *
  * @param int $activityid Activity id.
  * @return array
@@ -629,28 +529,38 @@ function peerreviewstudio_sync_activity_rubric(int $activityid, array $definitio
 function peerreviewstudio_get_activity_rubric(int $activityid): array {
     global $DB;
 
-    peerreviewstudio_ensure_default_rubric($activityid);
-    $rubric = $DB->get_record('peerreviewstudio_rubrics', ['peerreviewstudioid' => $activityid], '*', MUST_EXIST);
+    $rubric = $DB->get_record('peerreviewstudio_rubrics', ['peerreviewstudioid' => $activityid], '*', IGNORE_MULTIPLE);
+    if (!$rubric) {
+        peerreviewstudio_sync_activity_rubric($activityid, peerreviewstudio_default_rubric_definition());
+        $rubric = $DB->get_record('peerreviewstudio_rubrics', ['peerreviewstudioid' => $activityid], '*', MUST_EXIST);
+    }
+
     $criteria = $DB->get_records('peerreviewstudio_r_criteria', ['rubricid' => $rubric->id], 'sortorder ASC, id ASC');
+    if (!$criteria) {
+        return [];
+    }
+    [$insql, $params] = $DB->get_in_or_equal(array_keys($criteria), SQL_PARAMS_NAMED);
+    $levels = $DB->get_records_select('peerreviewstudio_r_levels', "criterionid $insql", $params, 'sortorder ASC, id ASC');
+
     $result = [];
     foreach ($criteria as $criterion) {
-        $levels = $DB->get_records('peerreviewstudio_r_levels', ['criterionid' => $criterion->id], 'sortorder ASC, id ASC');
-        $result[] = [
+        $result[(int)$criterion->id] = [
             'id' => (int)$criterion->id,
             'label' => (string)$criterion->label,
             'description' => (string)$criterion->description,
             'weight' => (float)$criterion->weight,
-            'levels' => array_map(static function($level): array {
-                return [
-                    'id' => (int)$level->id,
-                    'label' => (string)$level->label,
-                    'score' => (float)$level->score,
-                ];
-            }, array_values($levels)),
+            'levels' => [],
+        ];
+    }
+    foreach ($levels as $level) {
+        $result[(int)$level->criterionid]['levels'][] = [
+            'id' => (int)$level->id,
+            'label' => (string)$level->label,
+            'score' => (float)$level->score,
         ];
     }
 
-    return $result;
+    return array_values($result);
 }
 
 /**
@@ -700,6 +610,68 @@ function peerreviewstudio_calculate_rubric_result(array $rubric, array $formdata
 }
 
 /**
+ * Recalculate the grade every stored review proposes, from its rubric answers.
+ *
+ * The rubric answers are the source of truth: when a teacher changes the
+ * maximum submission grade, the criterion weights, or the level scores,
+ * the grade each review proposes must follow.
+ *
+ * @param stdClass $activity Activity record.
+ * @return void
+ */
+function peerreviewstudio_recalculate_review_grades(stdClass $activity): void {
+    global $DB;
+
+    $rubric = peerreviewstudio_get_activity_rubric((int)$activity->id);
+    $grademax = (float)($activity->grademaxsubmission ?? 0);
+
+    $sql = "SELECT ans.id, ans.reviewid, ans.criterionid, ans.levelid, ans.commenttext, r.grade
+              FROM {peerreviewstudio_r_answers} ans
+              JOIN {peerreviewstudio_reviews} r ON r.id = ans.reviewid
+              JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
+             WHERE a.peerreviewstudioid = :activityid
+          ORDER BY ans.reviewid ASC, ans.id ASC";
+    $formdatabyreview = [];
+    $storedgrades = [];
+    $recordset = $DB->get_recordset_sql($sql, ['activityid' => $activity->id]);
+    foreach ($recordset as $answer) {
+        $formdatabyreview[(int)$answer->reviewid]['criterion_' . (int)$answer->criterionid] = (int)$answer->levelid;
+        $formdatabyreview[(int)$answer->reviewid]['criterioncomment_' . (int)$answer->criterionid] = (string)$answer->commenttext;
+        $storedgrades[(int)$answer->reviewid] = $answer->grade;
+    }
+    $recordset->close();
+
+    foreach ($formdatabyreview as $reviewid => $formdata) {
+        $result = peerreviewstudio_calculate_rubric_result($rubric, $formdata, $grademax);
+        foreach ($result['answers'] as $answer) {
+            $DB->set_field('peerreviewstudio_r_answers', 'score', $answer['score'], [
+                'reviewid' => $reviewid,
+                'criterionid' => $answer['criterionid'],
+            ]);
+        }
+        if ($storedgrades[$reviewid] === null || abs((float)$storedgrades[$reviewid] - $result['grade']) > 0.00001) {
+            $DB->set_field('peerreviewstudio_reviews', 'grade', $result['grade'], ['id' => $reviewid]);
+        }
+    }
+}
+
+// Locks.
+
+/**
+ * Take a short-lived lock for a plugin resource.
+ *
+ * @param string $resource Resource name.
+ * @param int $timeout Seconds to wait for the lock.
+ * @return \core\lock\lock|false
+ */
+function peerreviewstudio_get_lock(string $resource, int $timeout = 10) {
+    $factory = \core\lock\lock_config::get_lock_factory('mod_peerreviewstudio');
+    return $factory->get_lock($resource, $timeout);
+}
+
+// Submissions.
+
+/**
  * Return the current user submission for an activity.
  *
  * @param int $activityid Activity id.
@@ -709,34 +681,300 @@ function peerreviewstudio_calculate_rubric_result(array $rubric, array $formdata
 function peerreviewstudio_get_user_submission(int $activityid, int $userid): stdClass|false {
     global $DB;
 
+    if ($userid <= 0) {
+        return false;
+    }
+
     return $DB->get_record('peerreviewstudio_submissions', [
         'peerreviewstudioid' => $activityid,
         'userid' => $userid,
-    ]);
+    ], '*', IGNORE_MULTIPLE);
 }
 
 /**
- * Whether submissions are open right now.
+ * Whether a submission can still be edited by its author.
+ *
+ * Once a reviewer has been matched to the submission its content is
+ * frozen: reviewers must assess the same work the author will be graded
+ * on, so later edits are not allowed (a tutor requeue reopens it).
  *
  * @param stdClass $activity Activity record.
+ * @param stdClass|false $submission Existing submission, or false when none.
  * @return bool
  */
-function peerreviewstudio_submissions_open(stdClass $activity): bool {
-    if ((string)($activity->workflowmode ?? 'scheduled') === 'open') {
+function peerreviewstudio_submission_is_editable(stdClass $activity, stdClass|false $submission): bool {
+    global $DB;
+
+    if (!peerreviewstudio_phase_allows_submissions($activity)) {
+        return false;
+    }
+    if (!$submission) {
         return true;
     }
-    $now = time();
-    if (!empty($activity->timeopen) && $now < (int)$activity->timeopen) {
+    if ((string)$submission->status === 'closed') {
         return false;
     }
-    if (!empty($activity->timeclose) && $now > (int)$activity->timeclose) {
-        return false;
-    }
-    return true;
+
+    return !$DB->record_exists_select(
+        'peerreviewstudio_assignments',
+        "submissionid = :submissionid AND status <> 'cancelled'",
+        ['submissionid' => $submission->id]
+    );
 }
 
 /**
- * Calculate automatic submission grade from received submitted reviews.
+ * Prepare submission form editor and draft files for one submission.
+ *
+ * @param context_module $context Module context.
+ * @param stdClass|false $submission Existing submission or false.
+ * @return array
+ */
+function peerreviewstudio_prepare_submission_form_data(context_module $context, stdClass|false $submission): array {
+    $data = [];
+    $data['submissiontext_editor'] = [
+        'text' => (string)($submission->onlinetext ?? ''),
+        'format' => (int)($submission->onlinetextformat ?? FORMAT_HTML),
+    ];
+
+    $draftitemid = file_get_submitted_draft_itemid('submissionfiles_filemanager');
+    file_prepare_draft_area(
+        $draftitemid,
+        $context->id,
+        'mod_peerreviewstudio',
+        'submission_files',
+        $submission ? (int)$submission->id : null,
+        [
+            'subdirs' => 0,
+            'maxfiles' => PEERREVIEWSTUDIO_MAXFILES,
+        ]
+    );
+    $data['submissionfiles_filemanager'] = $draftitemid;
+
+    return $data;
+}
+
+/**
+ * Return stored submission files.
+ *
+ * @param context_module $context Module context.
+ * @param int $submissionid Submission id.
+ * @return stored_file[]
+ */
+function peerreviewstudio_get_submission_files(context_module $context, int $submissionid): array {
+    $fs = get_file_storage();
+    return array_values(
+        $fs->get_area_files($context->id, 'mod_peerreviewstudio', 'submission_files', $submissionid, 'filename', false)
+    );
+}
+
+/**
+ * Create or update a learner submission.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $userid User id.
+ * @param array $editordata Editor payload.
+ * @param int $draftitemid Draft file area item id (0 to skip file handling).
+ * @param context_module|null $context Module context, required to save draft files.
+ * @return stdClass
+ */
+function peerreviewstudio_save_submission(
+    stdClass $activity,
+    int $userid,
+    array $editordata,
+    int $draftitemid = 0,
+    ?context_module $context = null,
+): stdClass {
+    global $DB;
+
+    // Serialise saves per learner so a double click can never create two
+    // submission rows for the same person.
+    $lock = peerreviewstudio_get_lock('submission_' . (int)$activity->id . '_' . $userid);
+    if (!$lock) {
+        throw new moodle_exception('submissionbusy', 'mod_peerreviewstudio');
+    }
+
+    try {
+        $now = time();
+        $submission = peerreviewstudio_get_user_submission((int)$activity->id, $userid);
+        $record = new stdClass();
+        $record->onlinetext = trim((string)($editordata['text'] ?? ''));
+        $record->onlinetextformat = (int)($editordata['format'] ?? FORMAT_HTML);
+        $record->timesubmitted = $now;
+        $record->timemodified = $now;
+
+        $isnew = !$submission;
+        if ($isnew) {
+            $record->peerreviewstudioid = $activity->id;
+            $record->userid = $userid;
+            $record->status = 'submitted';
+            $record->timecreated = $now;
+            $record->id = $DB->insert_record('peerreviewstudio_submissions', $record);
+        } else {
+            // Editing keeps the workflow status: only the content changes.
+            $record->id = $submission->id;
+            $DB->update_record('peerreviewstudio_submissions', $record);
+        }
+
+        if ($context && $draftitemid > 0) {
+            file_save_draft_area_files(
+                $draftitemid,
+                $context->id,
+                'mod_peerreviewstudio',
+                'submission_files',
+                (int)$record->id,
+                [
+                    'subdirs' => 0,
+                    'maxfiles' => PEERREVIEWSTUDIO_MAXFILES,
+                ]
+            );
+        }
+    } finally {
+        $lock->release();
+    }
+
+    if ($isnew) {
+        $event = \mod_peerreviewstudio\event\submission_created::create([
+            'objectid' => $record->id,
+            'context' => $context ?? peerreviewstudio_get_activity_context((int)$activity->id),
+            'userid' => $userid,
+        ]);
+        $event->trigger();
+
+        peerreviewstudio_send_notification($activity, 'submissionreceived', $userid);
+    }
+
+    if (!empty($activity->autoassignenabled)) {
+        if (peerreviewstudio_needed_assignments($activity, (int)$record->id) > 0) {
+            peerreviewstudio_queue_submission($activity, (int)$record->id);
+        }
+        peerreviewstudio_process_assignment_queue($activity);
+    }
+
+    peerreviewstudio_update_submission_status($activity, (int)$record->id);
+    peerreviewstudio_refresh_submission_grade($activity, (int)$record->id);
+    peerreviewstudio_update_completion_state($activity, $userid);
+
+    return $DB->get_record('peerreviewstudio_submissions', ['id' => $record->id], '*', MUST_EXIST);
+}
+
+/**
+ * Work out the workflow status of one submission from the stored facts.
+ *
+ * The status is derived, never hand-edited: it only reflects how far the
+ * submission is from having received its target number of reviews.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $submission Submission record.
+ * @return string One of peerreviewstudio_submission_statuses().
+ */
+function peerreviewstudio_derive_submission_status(stdClass $activity, stdClass $submission): string {
+    global $DB;
+
+    $completed = peerreviewstudio_count_received_reviews((int)$submission->id);
+    $target = max(1, (int)($activity->reviewsreceivedtarget ?? 1));
+    if ($completed >= $target) {
+        return 'closed';
+    }
+    if ($completed > 0) {
+        return 'partiallyreviewed';
+    }
+
+    // A submission resolved by the AI fallback review stays closed: the AI
+    // assessment stood in for the peer reviews that never arrived.
+    if (
+        (int)($submission->timeescalated ?? 0) > 0 && ($submission->aigrade ?? null) !== null
+            && !empty($activity->aireviewenabled) && !empty($activity->aifallbackenabled)
+    ) {
+        return 'closed';
+    }
+
+    $open = $DB->count_records('peerreviewstudio_assignments', [
+        'submissionid' => $submission->id,
+        'status' => 'assigned',
+    ]);
+    if ($open > 0) {
+        return 'assigned';
+    }
+
+    $queued = $DB->record_exists('peerreviewstudio_queue', [
+        'submissionid' => $submission->id,
+        'status' => 'pending',
+    ]);
+
+    return $queued ? 'queued' : 'submitted';
+}
+
+/**
+ * Store the derived workflow status of one submission.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $submissionid Submission id.
+ * @return string The current status.
+ */
+function peerreviewstudio_update_submission_status(stdClass $activity, int $submissionid): string {
+    global $DB;
+
+    $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $submissionid], '*', MUST_EXIST);
+    $status = peerreviewstudio_derive_submission_status($activity, $submission);
+    if ($status !== (string)$submission->status) {
+        $DB->update_record('peerreviewstudio_submissions', (object) [
+            'id' => $submissionid,
+            'status' => $status,
+            'timemodified' => time(),
+        ]);
+    }
+
+    return $status;
+}
+
+/**
+ * Count the submitted reviews one submission has received.
+ *
+ * @param int $submissionid Submission id.
+ * @return int
+ */
+function peerreviewstudio_count_received_reviews(int $submissionid): int {
+    global $DB;
+
+    return (int)$DB->count_records_sql(
+        "SELECT COUNT(r.id)
+           FROM {peerreviewstudio_reviews} r
+           JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
+          WHERE a.submissionid = :submissionid
+            AND r.status = 'submitted'",
+        ['submissionid' => $submissionid]
+    );
+}
+
+/**
+ * Count the reviews one learner has completed in an activity.
+ *
+ * @param int $activityid Activity id.
+ * @param int $userid Reviewer user id.
+ * @return int
+ */
+function peerreviewstudio_count_completed_reviews(int $activityid, int $userid): int {
+    global $DB;
+
+    if ($userid <= 0) {
+        return 0;
+    }
+
+    return (int)$DB->count_records_sql(
+        "SELECT COUNT(r.id)
+           FROM {peerreviewstudio_reviews} r
+           JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
+          WHERE a.peerreviewstudioid = :activityid
+            AND r.reviewerid = :reviewerid
+            AND r.status = 'submitted'",
+        ['activityid' => $activityid, 'reviewerid' => $userid]
+    );
+}
+
+// Grades.
+
+/**
+ * Calculate the automatic submission grade from the reviews received.
  *
  * Each submitted review stores the grade it proposes for the submission
  * (already in submission grade space), so the automatic submission grade
@@ -744,9 +982,9 @@ function peerreviewstudio_submissions_open(stdClass $activity): bool {
  *
  * @param stdClass $activity Activity record.
  * @param int $submissionid Submission id.
- * @return float
+ * @return float|null Null while the submission has nothing to be graded on yet.
  */
-function peerreviewstudio_calculate_submission_grade(stdClass $activity, int $submissionid): float {
+function peerreviewstudio_calculate_submission_grade(stdClass $activity, int $submissionid): ?float {
     global $DB;
 
     $submissionmax = (float)($activity->grademaxsubmission ?? 0);
@@ -761,32 +999,30 @@ function peerreviewstudio_calculate_submission_grade(stdClass $activity, int $su
                AND r.status = 'submitted'
                AND r.grade IS NOT NULL";
     $average = $DB->get_field_sql($sql, ['submissionid' => $submissionid]);
+    $aigrade = null;
+    if (!empty($activity->aireviewenabled)) {
+        $aigrade = $DB->get_field('peerreviewstudio_submissions', 'aigrade', ['id' => $submissionid]);
+        $aigrade = ($aigrade === false || $aigrade === null) ? null : ((float)$aigrade / 100.0) * $submissionmax;
+    }
+
     if ($average === false || $average === null) {
         // AI fallback: when a submission never received any peer review and
-        // the fallback is enabled, the AI grade (0-100) stands in fully so
-        // the learner is not punished with a zero for peers' inaction. As
-        // soon as a real peer review arrives, the normal peer-average path
-        // below takes over again.
-        if (!empty($activity->aireviewenabled) && !empty($activity->aifallbackenabled)) {
-            $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $submissionid]);
-            if ($submission && $submission->aigrade !== null) {
-                return round(min($submissionmax, max(0.0, ((float)$submission->aigrade / 100.0) * $submissionmax)), 2);
-            }
+        // the fallback is enabled, the AI grade stands in fully so the
+        // learner is not left ungraded because of peers' inaction. As soon
+        // as a real peer review arrives, the peer-average path takes over.
+        if ($aigrade !== null && !empty($activity->aifallbackenabled)) {
+            return round(min($submissionmax, max(0.0, $aigrade)), 2);
         }
-        return 0.0;
+        return null;
     }
     $peergrade = min($submissionmax, max(0.0, (float)$average));
 
     // Optional AI second review: blend the peer average with the AI grade
-    // (stored as 0-100) using the configured weight. The blend only kicks
-    // in once the AI result exists, so grades never wait on the AI call.
-    if (!empty($activity->aireviewenabled)) {
-        $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $submissionid]);
-        if ($submission && $submission->aigrade !== null) {
-            $weight = min(100.0, max(0.0, (float)($activity->aigradeweight ?? 0))) / 100.0;
-            $aigrade = ((float)$submission->aigrade / 100.0) * $submissionmax;
-            $peergrade = (1 - $weight) * $peergrade + $weight * $aigrade;
-        }
+    // using the configured weight. The blend only applies once the AI
+    // result exists, so grades never wait on the AI call.
+    if ($aigrade !== null) {
+        $weight = min(100.0, max(0.0, (float)($activity->aigradeweight ?? 0))) / 100.0;
+        $peergrade = (1 - $weight) * $peergrade + $weight * $aigrade;
     }
 
     return round(min($submissionmax, max(0.0, $peergrade)), 2);
@@ -802,24 +1038,14 @@ function peerreviewstudio_calculate_submission_grade(stdClass $activity, int $su
 function peerreviewstudio_calculate_review_grade(stdClass $activity, int $userid): float {
     global $DB;
 
-    $completed = $DB->count_records_sql(
-        "SELECT COUNT(1)
-           FROM {peerreviewstudio_reviews} r
-          WHERE r.reviewerid = :reviewerid
-            AND r.submissionid IN (
-                SELECT s.id FROM {peerreviewstudio_submissions} s WHERE s.peerreviewstudioid = :activityid
-            )
-            AND r.status = 'submitted'",
-        ['reviewerid' => $userid, 'activityid' => $activity->id]
-    );
-    $required = max(1, (int)($activity->reviewcountrequired ?? 1));
     $reviewmax = (float)($activity->grademaxreview ?? 0);
-
-    if ($reviewmax <= 0) {
+    if ($reviewmax <= 0 || $userid <= 0) {
         return 0.0;
     }
 
-    $grade = peerreviewstudio_calculate_review_completion_grade((int)$completed, $required, $reviewmax);
+    $completed = peerreviewstudio_count_completed_reviews((int)$activity->id, $userid);
+    $required = max(1, (int)($activity->reviewcountrequired ?? 1));
+    $grade = peerreviewstudio_calculate_review_completion_grade($completed, $required, $reviewmax);
 
     // Optional AI second review: the reviewer participation grade is
     // scaled by the average AI quality assessment (0-100) of their
@@ -863,9 +1089,12 @@ function peerreviewstudio_calculate_review_completion_grade(int $completed, int 
 /**
  * Normalise one teacher override grade from raw request input.
  *
+ * The value is parsed with the current user's locale, so "7,5" is
+ * accepted wherever the comma is the decimal separator.
+ *
  * @param stdClass $activity Activity record.
  * @param string $rawvalue Raw request value.
- * @return float|null
+ * @return float|null Null clears the override.
  */
 function peerreviewstudio_normalize_teacher_grade_override(stdClass $activity, string $rawvalue): ?float {
     $rawvalue = trim($rawvalue);
@@ -873,22 +1102,38 @@ function peerreviewstudio_normalize_teacher_grade_override(stdClass $activity, s
         return null;
     }
 
-    if (!is_numeric($rawvalue)) {
-        throw new invalid_parameter_exception('Invalid override grade value.');
+    $value = unformat_float($rawvalue, true);
+    if ($value === false || $value === null || !is_finite((float)$value)) {
+        throw new moodle_exception('invalidgradeoverride', 'mod_peerreviewstudio');
     }
 
-    $value = (float)$rawvalue;
-    if (!is_finite($value)) {
-        throw new invalid_parameter_exception('Invalid override grade value.');
-    }
-
+    $value = max(0.0, (float)$value);
     $maxgrade = max(0.0, (float)($activity->grademaxsubmission ?? 0) + (float)($activity->grademaxreview ?? 0));
-    $value = max(0.0, $value);
     if ($maxgrade > 0) {
         $value = min($maxgrade, $value);
     }
 
     return round($value, 2);
+}
+
+/**
+ * Whether the grade of one submission may be shown to its author.
+ *
+ * Grades follow the feedback: they reach the gradebook when feedback is
+ * released (feedback phase, or a closed submission in open mode), so the
+ * gradebook never reveals a peer grade before the feedback itself. A
+ * teacher override is always released.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $submission Submission record.
+ * @return bool
+ */
+function peerreviewstudio_grade_is_released(stdClass $activity, stdClass $submission): bool {
+    if ($submission->teachergradeoverride !== null) {
+        return true;
+    }
+
+    return peerreviewstudio_phase_allows_feedback($activity, $submission);
 }
 
 /**
@@ -908,17 +1153,49 @@ function peerreviewstudio_refresh_submission_grade(stdClass $activity, int $subm
 
     $submissiongrade = peerreviewstudio_calculate_submission_grade($activity, $submissionid);
     $reviewgrade = peerreviewstudio_calculate_review_grade($activity, (int)$submission->userid);
-    $finalgrade = $submissiongrade + $reviewgrade;
 
-    $submission->submissiongrade = $submissiongrade;
-    $submission->reviewgrade = $reviewgrade;
-    $submission->finalgrade = $submission->teachergradeoverride !== null
-        ? (float)$submission->teachergradeoverride
-        : $finalgrade;
-    $submission->timemodified = time();
-    $DB->update_record('peerreviewstudio_submissions', $submission);
+    if ($submission->teachergradeoverride !== null) {
+        $finalgrade = (float)$submission->teachergradeoverride;
+    } else if ($submissiongrade === null) {
+        // Nothing to grade the submission on yet: leave it ungraded rather
+        // than publishing a misleading partial grade.
+        $finalgrade = null;
+    } else {
+        $finalgrade = round($submissiongrade + $reviewgrade, 2);
+    }
 
-    peerreviewstudio_grade_user_update($activity, (int)$submission->userid, (float)$submission->finalgrade);
+    $changed = !peerreviewstudio_grades_equal($submission->submissiongrade, $submissiongrade)
+        || !peerreviewstudio_grades_equal($submission->reviewgrade, $reviewgrade)
+        || !peerreviewstudio_grades_equal($submission->finalgrade, $finalgrade);
+    if ($changed) {
+        $DB->update_record('peerreviewstudio_submissions', (object) [
+            'id' => $submissionid,
+            'submissiongrade' => $submissiongrade,
+            'reviewgrade' => $reviewgrade,
+            'finalgrade' => $finalgrade,
+            'timemodified' => time(),
+        ]);
+    }
+
+    if ((int)$submission->userid > 0) {
+        $released = peerreviewstudio_grade_is_released($activity, $submission);
+        peerreviewstudio_grade_user_update($activity, (int)$submission->userid, $released ? $finalgrade : null);
+    }
+}
+
+/**
+ * Compare two nullable stored grades.
+ *
+ * @param mixed $stored Value read from the database.
+ * @param float|null $calculated Freshly calculated value.
+ * @return bool
+ */
+function peerreviewstudio_grades_equal($stored, ?float $calculated): bool {
+    if ($stored === null || $calculated === null) {
+        return $stored === null && $calculated === null;
+    }
+
+    return abs((float)$stored - $calculated) < 0.00001;
 }
 
 /**
@@ -936,9 +1213,11 @@ function peerreviewstudio_set_teacher_grade_override(stdClass $activity, int $su
         'id' => $submissionid,
         'peerreviewstudioid' => $activity->id,
     ], '*', MUST_EXIST);
-    $submission->teachergradeoverride = $override;
-    $submission->timemodified = time();
-    $DB->update_record('peerreviewstudio_submissions', $submission);
+    $DB->update_record('peerreviewstudio_submissions', (object) [
+        'id' => $submissionid,
+        'teachergradeoverride' => $override,
+        'timemodified' => time(),
+    ]);
 
     $event = \mod_peerreviewstudio\event\grade_override_updated::create([
         'objectid' => $submission->id,
@@ -954,9 +1233,148 @@ function peerreviewstudio_set_teacher_grade_override(stdClass $activity, int $su
 
     peerreviewstudio_refresh_submission_grade($activity, $submissionid);
 
-    if ($override !== null) {
+    if ($override !== null && (int)$submission->userid > 0) {
         peerreviewstudio_send_notification($activity, 'gradereceived', (int)$submission->userid);
+        $DB->set_field('peerreviewstudio_submissions', 'timegradenotified', time(), ['id' => $submissionid]);
     }
+}
+
+/**
+ * Tell an author their feedback and grade are available, once.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $submissionid Submission id.
+ * @return bool Whether a notification was sent.
+ */
+function peerreviewstudio_notify_grade_released(stdClass $activity, int $submissionid): bool {
+    global $DB;
+
+    $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $submissionid]);
+    if (!$submission || (int)$submission->userid <= 0 || (int)$submission->timegradenotified > 0) {
+        return false;
+    }
+    if (!peerreviewstudio_grade_is_released($activity, $submission)) {
+        return false;
+    }
+    // Nothing to announce while the submission has neither feedback nor grade.
+    if ($submission->finalgrade === null && !peerreviewstudio_count_received_reviews($submissionid)) {
+        return false;
+    }
+
+    peerreviewstudio_send_notification($activity, 'gradereceived', (int)$submission->userid);
+    $DB->set_field('peerreviewstudio_submissions', 'timegradenotified', time(), ['id' => $submissionid]);
+
+    return true;
+}
+
+/**
+ * Publish every released grade of one activity and notify the authors.
+ *
+ * Called whenever feedback may have just become visible: the scheduled
+ * feedback phase starting, or a teacher switching phase or settings.
+ *
+ * @param stdClass $activity Activity record.
+ * @return void
+ */
+function peerreviewstudio_release_feedback(stdClass $activity): void {
+    global $CFG, $DB;
+    require_once($CFG->dirroot . '/mod/peerreviewstudio/lib.php');
+
+    peerreviewstudio_update_grades($activity);
+
+    $pending = $DB->get_fieldset_select(
+        'peerreviewstudio_submissions',
+        'id',
+        'peerreviewstudioid = :activityid AND userid > 0 AND timegradenotified = 0',
+        ['activityid' => $activity->id]
+    );
+    foreach ($pending as $submissionid) {
+        peerreviewstudio_notify_grade_released($activity, (int)$submissionid);
+    }
+}
+
+/**
+ * Recalculate everything that depends on the activity settings.
+ *
+ * Run after a teacher changes the grading or matching settings: the grade
+ * each review proposes, the status of every submission, the stored grades,
+ * and the reviewer queue all follow the new configuration.
+ *
+ * @param stdClass $activity Activity record, as stored.
+ * @return void
+ */
+function peerreviewstudio_resync_activity(stdClass $activity): void {
+    global $DB;
+
+    peerreviewstudio_recalculate_review_grades($activity);
+
+    $submissionids = $DB->get_fieldset_select(
+        'peerreviewstudio_submissions',
+        'id',
+        'peerreviewstudioid = :activityid AND userid > 0',
+        ['activityid' => $activity->id]
+    );
+    if (!empty($activity->autoassignenabled)) {
+        // Submissions the automatic cycle already gave up on stay with the tutor.
+        $escalatedids = $DB->get_fieldset_select(
+            'peerreviewstudio_submissions',
+            'id',
+            'peerreviewstudioid = :activityid AND timeescalated > 0',
+            ['activityid' => $activity->id]
+        );
+        foreach (array_diff($submissionids, $escalatedids) as $submissionid) {
+            if (peerreviewstudio_needed_assignments($activity, (int)$submissionid) > 0) {
+                peerreviewstudio_queue_submission($activity, (int)$submissionid);
+            }
+        }
+        peerreviewstudio_process_assignment_queue($activity);
+    }
+
+    foreach ($submissionids as $submissionid) {
+        peerreviewstudio_update_submission_status($activity, (int)$submissionid);
+        peerreviewstudio_refresh_submission_grade($activity, (int)$submissionid);
+    }
+}
+
+// Completion.
+
+/**
+ * Re-evaluate the activity completion state of one learner.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $userid User id.
+ * @return void
+ */
+function peerreviewstudio_update_completion_state(stdClass $activity, int $userid): void {
+    global $CFG;
+    require_once($CFG->libdir . '/completionlib.php');
+
+    if ($userid <= 0 || (empty($activity->completionsubmit) && empty($activity->completionreviews))) {
+        return;
+    }
+
+    $cm = get_coursemodule_from_instance('peerreviewstudio', (int)$activity->id, (int)$activity->course, false, IGNORE_MISSING);
+    if (!$cm) {
+        return;
+    }
+    $completion = new completion_info(get_course((int)$activity->course));
+    if ($completion->is_enabled($cm) == COMPLETION_TRACKING_AUTOMATIC) {
+        $completion->update_state($cm, COMPLETION_COMPLETE, $userid);
+    }
+}
+
+// Notifications.
+
+/**
+ * Return the activity name as plain text, for messages and prompts.
+ *
+ * @param stdClass $activity Activity record.
+ * @param context_module $context Module context.
+ * @return string
+ */
+function peerreviewstudio_plain_activity_name(stdClass $activity, context_module $context): string {
+    $name = format_string($activity->name, true, ['context' => $context]);
+    return html_entity_decode(strip_tags($name), ENT_QUOTES | ENT_HTML5, 'UTF-8');
 }
 
 /**
@@ -974,23 +1392,36 @@ function peerreviewstudio_set_teacher_grade_override(stdClass $activity, int $su
  */
 function peerreviewstudio_send_notification(stdClass $activity, string $providername, int $userid, $a = null): void {
     $user = \core_user::get_user($userid);
-    if (!$user || !empty($user->deleted) || !empty($user->suspended)) {
+    if (!$user || !empty($user->deleted) || !empty($user->suspended) || !\core_user::is_real_user($userid)) {
         return;
     }
 
-    $activityname = format_string($activity->name);
+    $cm = get_coursemodule_from_instance('peerreviewstudio', (int)$activity->id, (int)$activity->course, false, IGNORE_MISSING);
+    if (!$cm) {
+        return;
+    }
+    // Never notify about an activity the recipient cannot open (hidden,
+    // restricted, or not enrolled any more).
+    try {
+        $visible = get_fast_modinfo((int)$activity->course, $userid)->get_cm((int)$cm->id)->uservisible;
+    } catch (moodle_exception $e) {
+        $visible = false;
+    }
+    if (!$visible) {
+        return;
+    }
+
+    $context = context_module::instance((int)$cm->id);
+    // The message is built as plain text and escaped once for its HTML version.
+    $activityname = peerreviewstudio_plain_activity_name($activity, $context);
     if ($a === null) {
         $a = $activityname;
     }
     $stringmanager = get_string_manager();
-    $subject = $stringmanager->get_string(
-        'message_' . $providername . '_subject', 'mod_peerreviewstudio', $a, $user->lang
-    );
-    $body = $stringmanager->get_string(
-        'message_' . $providername . '_body', 'mod_peerreviewstudio', $a, $user->lang
-    );
-
-    $cm = get_coursemodule_from_instance('peerreviewstudio', (int)$activity->id, (int)$activity->course, false, IGNORE_MISSING);
+    $lang = !empty($user->lang) ? $user->lang : null;
+    $subject = $stringmanager->get_string('message_' . $providername . '_subject', 'mod_peerreviewstudio', $a, $lang);
+    $body = $stringmanager->get_string('message_' . $providername . '_body', 'mod_peerreviewstudio', $a, $lang);
+    $url = new moodle_url('/mod/peerreviewstudio/view.php', ['id' => (int)$cm->id]);
 
     $message = new \core\message\message();
     $message->component = 'mod_peerreviewstudio';
@@ -998,122 +1429,200 @@ function peerreviewstudio_send_notification(stdClass $activity, string $provider
     $message->userfrom = \core_user::get_noreply_user();
     $message->userto = $user;
     $message->subject = $subject;
-    $message->fullmessage = $body;
+    $message->fullmessage = $body . "\n\n" . $url->out(false);
     $message->fullmessageformat = FORMAT_PLAIN;
-    $message->fullmessagehtml = text_to_html($body, false, false, true);
+    $message->fullmessagehtml = html_writer::tag('p', s($body))
+        . html_writer::tag('p', html_writer::link($url, s($activityname)));
     $message->smallmessage = $subject;
     $message->notification = 1;
     $message->courseid = (int)$activity->course;
-    if ($cm) {
-        $url = new moodle_url('/mod/peerreviewstudio/view.php', ['id' => (int)$cm->id]);
-        $message->contexturl = $url->out(false);
-        $message->contexturlname = $activityname;
-    }
+    $message->contexturl = $url->out(false);
+    $message->contexturlname = $activityname;
 
     message_send($message);
 }
 
+// Reviewer matching.
+
 /**
- * Create or update a learner submission.
+ * Return the group memberships of a course, optionally limited to a grouping.
  *
- * @param stdClass $activity Activity record.
- * @param int $userid User id.
- * @param array $editordata Editor payload.
- * @param int $draftitemid Draft file area item id (0 to skip file handling).
- * @param context_module|null $context Module context, required to save draft files.
- * @return stdClass
+ * @param int $courseid Course id.
+ * @param int $groupingid Grouping id, or 0 for every course group.
+ * @return array User id => list of group ids.
  */
-function peerreviewstudio_save_submission(
-    stdClass $activity,
-    int $userid,
-    array $editordata,
-    int $draftitemid = 0,
-    ?context_module $context = null,
-): stdClass {
+function peerreviewstudio_get_group_memberships(int $courseid, int $groupingid = 0): array {
     global $DB;
 
-    $now = time();
-    $submission = peerreviewstudio_get_user_submission((int)$activity->id, $userid);
-    $record = new stdClass();
-    $record->peerreviewstudioid = $activity->id;
-    $record->userid = $userid;
-    $record->onlinetext = trim((string)($editordata['text'] ?? ''));
-    $record->onlinetextformat = (int)($editordata['format'] ?? FORMAT_HTML);
-    $record->timesubmitted = $now;
-    $record->timemodified = $now;
-
-    if ($submission) {
-        // Editing an existing submission keeps its workflow status so open
-        // assignments and completed reviews are not disturbed.
-        $record->id = $submission->id;
-        $record->status = $submission->status;
-        $record->timecreated = $submission->timecreated;
-        $DB->update_record('peerreviewstudio_submissions', $record);
-    } else {
-        $record->status = !empty($activity->autoassignenabled) ? 'queued' : 'submitted';
-        $record->timecreated = $now;
-        $record->id = $DB->insert_record('peerreviewstudio_submissions', $record);
-        $event = \mod_peerreviewstudio\event\submission_created::create([
-            'objectid' => $record->id,
-            'context' => peerreviewstudio_get_activity_context((int)$activity->id),
-            'userid' => $userid,
-        ]);
-        $event->trigger();
-
-        peerreviewstudio_send_notification($activity, 'submissionreceived', $userid);
+    $params = ['courseid' => $courseid];
+    $groupingjoin = '';
+    if ($groupingid > 0) {
+        $groupingjoin = 'JOIN {groupings_groups} gg ON gg.groupid = g.id AND gg.groupingid = :groupingid';
+        $params['groupingid'] = $groupingid;
     }
+    $sql = "SELECT gm.id, gm.userid, gm.groupid
+              FROM {groups_members} gm
+              JOIN {groups} g ON g.id = gm.groupid
+                   {$groupingjoin}
+             WHERE g.courseid = :courseid";
 
-    if ($context && $draftitemid > 0) {
-        file_save_draft_area_files(
-            $draftitemid,
-            $context->id,
-            'mod_peerreviewstudio',
-            'submission_files',
-            (int)$record->id,
-            [
-                'subdirs' => 0,
-                'maxfiles' => PEERREVIEWSTUDIO_MAXFILES,
-                'accepted_types' => '*',
-            ]
-        );
+    $memberships = [];
+    $recordset = $DB->get_recordset_sql($sql, $params);
+    foreach ($recordset as $membership) {
+        $memberships[(int)$membership->userid][] = (int)$membership->groupid;
     }
+    $recordset->close();
 
-    if (!empty($activity->autoassignenabled)) {
-        if (peerreviewstudio_needed_assignments($activity, (int)$record->id) > 0) {
-            peerreviewstudio_queue_submission($activity, (int)$record->id, 'awaiting_reviewer');
+    return $memberships;
+}
+
+/**
+ * Classify every other submitter as an eligible or blocked reviewer.
+ *
+ * A candidate must be an active participant who may review, must not have
+ * been matched to this submission before, and must respect the reciprocal
+ * and group pool rules of the activity. Eligible candidates come back
+ * ordered by reviewing load, so work is spread evenly.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $submission Submission record.
+ * @return array{eligible: stdClass[], ineligible: stdClass[]} Blocked candidates carry a 'reasons' list.
+ */
+function peerreviewstudio_get_reviewer_candidates(stdClass $activity, stdClass $submission): array {
+    global $DB;
+
+    $cm = get_coursemodule_from_instance('peerreviewstudio', (int)$activity->id, (int)$activity->course, false, MUST_EXIST);
+    $context = context_module::instance((int)$cm->id);
+    [$enrolledsql, $enrolledparams] = get_enrolled_sql($context, 'mod/peerreviewstudio:review', 0, true);
+    $namefields = \core_user\fields::for_name()->get_sql('u', false, '', '', false)->selects;
+
+    $sql = "SELECT s.id, s.userid, s.status, s.timesubmitted, {$namefields},
+                   (SELECT COUNT(1)
+                      FROM {peerreviewstudio_assignments} al
+                     WHERE al.peerreviewstudioid = s.peerreviewstudioid
+                       AND al.reviewerid = s.userid
+                       AND al.status <> 'cancelled') AS reviewload,
+                   (SELECT COUNT(1)
+                      FROM {peerreviewstudio_assignments} ac
+                     WHERE ac.peerreviewstudioid = s.peerreviewstudioid
+                       AND ac.reviewerid = s.userid
+                       AND ac.status = 'cancelled') AS cancelledload,
+                   (SELECT COUNT(1)
+                      FROM {peerreviewstudio_assignments} ax
+                     WHERE ax.submissionid = :submissionid
+                       AND ax.reviewerid = s.userid) AS alreadyassigned,
+                   (SELECT COUNT(1)
+                      FROM {peerreviewstudio_assignments} ar
+                     WHERE ar.submissionid = s.id
+                       AND ar.reviewerid = :authorid
+                       AND ar.status <> 'cancelled') AS reciprocal,
+                   CASE WHEN je.id IS NULL THEN 0 ELSE 1 END AS canreview
+              FROM {peerreviewstudio_submissions} s
+              JOIN {user} u ON u.id = s.userid
+         LEFT JOIN ({$enrolledsql}) je ON je.id = s.userid
+             WHERE s.peerreviewstudioid = :activityid
+               AND s.userid <> :userid
+               AND u.deleted = 0
+          ORDER BY reviewload ASC, cancelledload ASC, s.timesubmitted ASC, s.id ASC";
+    $candidates = $DB->get_records_sql($sql, $enrolledparams + [
+        'submissionid' => $submission->id,
+        'authorid' => $submission->userid,
+        'activityid' => $activity->id,
+        'userid' => $submission->userid,
+    ]);
+
+    $poolmode = (string)($activity->reviewpoolmode ?? 'any');
+    $memberships = [];
+    if ($poolmode !== 'any') {
+        $memberships = peerreviewstudio_get_group_memberships((int)$activity->course, (int)$cm->groupingid);
+    }
+    $authorgroups = $memberships[(int)$submission->userid] ?? [];
+
+    $result = ['eligible' => [], 'ineligible' => []];
+    foreach ($candidates as $candidate) {
+        $reasons = [];
+        if (empty($candidate->canreview)) {
+            $reasons[] = 'candidateinactive';
         }
-        peerreviewstudio_process_assignment_queue($activity);
+        if (!empty($candidate->alreadyassigned)) {
+            $reasons[] = 'alreadyassigned';
+        }
+        if (!empty($activity->avoidreciprocalreviews) && !empty($candidate->reciprocal)) {
+            $reasons[] = 'reciprocal';
+        }
+        if ($poolmode !== 'any') {
+            $shared = array_intersect($authorgroups, $memberships[(int)$candidate->userid] ?? []);
+            if ($poolmode === 'samegroup' && !$shared) {
+                $reasons[] = 'groupmismatch';
+            }
+            if ($poolmode === 'differentgroup' && $shared) {
+                $reasons[] = 'samegroupblocked';
+            }
+        }
+
+        if ($reasons) {
+            $candidate->reasons = $reasons;
+            $result['ineligible'][] = $candidate;
+        } else {
+            $result['eligible'][] = $candidate;
+        }
     }
 
-    peerreviewstudio_refresh_submission_grade($activity, (int)$record->id);
+    return $result;
+}
 
-    return $DB->get_record('peerreviewstudio_submissions', ['id' => $record->id], '*', MUST_EXIST);
+/**
+ * Return eligible reviewers for one submission ordered by current load.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $submission Submission record.
+ * @return stdClass[]
+ */
+function peerreviewstudio_get_eligible_reviewers_for_submission(stdClass $activity, stdClass $submission): array {
+    return peerreviewstudio_get_reviewer_candidates($activity, $submission)['eligible'];
+}
+
+/**
+ * Summarise why candidates are blocked, most frequent reason first.
+ *
+ * @param stdClass[] $candidates Blocked candidates carrying a 'reasons' list.
+ * @return string
+ */
+function peerreviewstudio_ineligible_candidates_summary(array $candidates): string {
+    $reasoncounts = [];
+    foreach ($candidates as $candidate) {
+        foreach (($candidate->reasons ?? []) as $reason) {
+            $reasoncounts[$reason] = ($reasoncounts[$reason] ?? 0) + 1;
+        }
+    }
+    if (!$reasoncounts) {
+        return '';
+    }
+
+    arsort($reasoncounts);
+    $parts = [];
+    foreach (array_slice($reasoncounts, 0, 3, true) as $reason => $count) {
+        $parts[] = get_string('eligibilityreason_' . $reason, 'mod_peerreviewstudio') . ' (' . $count . ')';
+    }
+
+    return implode(' ', $parts);
 }
 
 /**
  * Count open assignments plus submitted reviews for one submission.
  *
- * @param stdClass $activity Activity record.
  * @param int $submissionid Submission id.
  * @return int
  */
-function peerreviewstudio_count_review_capacity(stdClass $activity, int $submissionid): int {
+function peerreviewstudio_count_review_capacity(int $submissionid): int {
     global $DB;
 
     $open = $DB->count_records('peerreviewstudio_assignments', [
         'submissionid' => $submissionid,
         'status' => 'assigned',
     ]);
-    $completed = $DB->count_records_sql(
-        "SELECT COUNT(1)
-           FROM {peerreviewstudio_reviews} r
-           JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
-          WHERE a.submissionid = :submissionid
-            AND r.status = 'submitted'",
-        ['submissionid' => $submissionid]
-    );
 
-    return (int)$open + (int)$completed;
+    return (int)$open + peerreviewstudio_count_received_reviews($submissionid);
 }
 
 /**
@@ -1126,42 +1635,125 @@ function peerreviewstudio_count_review_capacity(stdClass $activity, int $submiss
 function peerreviewstudio_needed_assignments(stdClass $activity, int $submissionid): int {
     $target = max(1, (int)($activity->reviewsreceivedtarget ?? 1));
 
-    return max(0, $target - peerreviewstudio_count_review_capacity($activity, $submissionid));
+    return max(0, $target - peerreviewstudio_count_review_capacity($submissionid));
 }
 
 /**
- * Queue a submission for later assignment processing.
+ * Queue a submission for reviewer matching.
  *
  * @param stdClass $activity Activity record.
  * @param int $submissionid Submission id.
- * @param string $queuetype Queue type.
  * @return void
  */
-function peerreviewstudio_queue_submission(stdClass $activity, int $submissionid, string $queuetype): void {
+function peerreviewstudio_queue_submission(stdClass $activity, int $submissionid): void {
     global $DB;
 
-    $existing = $DB->get_record('peerreviewstudio_queue', [
+    $pending = $DB->record_exists('peerreviewstudio_queue', [
         'peerreviewstudioid' => $activity->id,
         'submissionid' => $submissionid,
-        'queuetype' => $queuetype,
         'status' => 'pending',
     ]);
-    if ($existing) {
+    if ($pending) {
         return;
     }
 
     $now = time();
-    $queue = (object) [
+    $DB->insert_record('peerreviewstudio_queue', (object) [
         'peerreviewstudioid' => $activity->id,
         'submissionid' => $submissionid,
-        'queuetype' => $queuetype,
+        'queuetype' => 'awaiting_reviewer',
         'status' => 'pending',
         'attempts' => 0,
         'lastattemptat' => 0,
         'timecreated' => $now,
         'timemodified' => $now,
+    ]);
+}
+
+/**
+ * Mark the pending queue entries of one submission with a final state.
+ *
+ * @param int $submissionid Submission id.
+ * @param string $status New queue status ('resolved' or 'failed').
+ * @return void
+ */
+function peerreviewstudio_close_queue_entries(int $submissionid, string $status = 'resolved'): void {
+    global $DB;
+
+    $DB->execute(
+        "UPDATE {peerreviewstudio_queue}
+            SET status = :newstatus, timemodified = :now
+          WHERE submissionid = :submissionid
+            AND status = 'pending'",
+        ['newstatus' => $status, 'now' => time(), 'submissionid' => $submissionid]
+    );
+}
+
+/**
+ * Create one reviewer assignment and tell the reviewer when they can start.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $submission Submission record.
+ * @param int $reviewerid Reviewer user id.
+ * @return stdClass The new assignment record.
+ */
+function peerreviewstudio_create_assignment(stdClass $activity, stdClass $submission, int $reviewerid): stdClass {
+    global $DB;
+
+    $now = time();
+    $assignment = (object) [
+        'peerreviewstudioid' => $activity->id,
+        'submissionid' => $submission->id,
+        'reviewerid' => $reviewerid,
+        'status' => 'assigned',
+        'timeassigned' => $now,
+        'timenotified' => 0,
+        'timereminded' => 0,
+        'timeopened' => 0,
+        'timecompleted' => 0,
+        'timemodified' => $now,
     ];
-    $DB->insert_record('peerreviewstudio_queue', $queue);
+    $assignment->id = $DB->insert_record('peerreviewstudio_assignments', $assignment);
+
+    // Reviewers are only told about work they can start right away; the
+    // rest are notified when the review phase opens.
+    if (peerreviewstudio_phase_allows_reviews($activity)) {
+        peerreviewstudio_send_notification($activity, 'reviewassigned', $reviewerid);
+        $assignment->timenotified = $now;
+        $DB->set_field('peerreviewstudio_assignments', 'timenotified', $now, ['id' => $assignment->id]);
+    }
+
+    return $assignment;
+}
+
+/**
+ * Notify reviewers of open assignments they have not been told about yet.
+ *
+ * @param stdClass $activity Activity record.
+ * @return void
+ */
+function peerreviewstudio_notify_pending_reviewers(stdClass $activity): void {
+    global $DB;
+
+    if (!peerreviewstudio_phase_allows_reviews($activity)) {
+        return;
+    }
+
+    $assignments = $DB->get_records('peerreviewstudio_assignments', [
+        'peerreviewstudioid' => $activity->id,
+        'status' => 'assigned',
+        'timenotified' => 0,
+    ], 'id ASC', 'id, reviewerid');
+    $notified = [];
+    $now = time();
+    foreach ($assignments as $assignment) {
+        // One message per reviewer, however many reviews they were given.
+        if ((int)$assignment->reviewerid > 0 && empty($notified[(int)$assignment->reviewerid])) {
+            peerreviewstudio_send_notification($activity, 'reviewassigned', (int)$assignment->reviewerid);
+            $notified[(int)$assignment->reviewerid] = true;
+        }
+        $DB->set_field('peerreviewstudio_assignments', 'timenotified', $now, ['id' => $assignment->id]);
+    }
 }
 
 /**
@@ -1169,172 +1761,61 @@ function peerreviewstudio_queue_submission(stdClass $activity, int $submissionid
  * configured reviews-received target for each queued submission.
  *
  * @param stdClass $activity Activity record.
- * @return void
+ * @return int Number of assignments created.
  */
-function peerreviewstudio_process_assignment_queue(stdClass $activity): void {
+function peerreviewstudio_process_assignment_queue(stdClass $activity): int {
     global $DB;
 
-    $queueentries = $DB->get_records('peerreviewstudio_queue', [
-        'peerreviewstudioid' => $activity->id,
-        'status' => 'pending',
-    ], 'timecreated ASC, id ASC');
+    if (!peerreviewstudio_matching_allowed($activity)) {
+        return 0;
+    }
 
-    foreach ($queueentries as $queueentry) {
-        $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $queueentry->submissionid], '*', IGNORE_MISSING);
-        if (!$submission) {
-            $queueentry->status = 'failed';
-            $queueentry->timemodified = time();
-            $DB->update_record('peerreviewstudio_queue', $queueentry);
-            continue;
-        }
+    // One matching run per activity at a time: the web request of a learner
+    // submitting and the scheduled task must never assign the same slot twice.
+    $lock = peerreviewstudio_get_lock('queue_' . (int)$activity->id);
+    if (!$lock) {
+        return 0;
+    }
 
-        $queueentry->attempts = (int)$queueentry->attempts + 1;
-        $queueentry->lastattemptat = time();
-        $queueentry->timemodified = time();
+    $created = 0;
+    try {
+        $queueentries = $DB->get_records('peerreviewstudio_queue', [
+            'peerreviewstudioid' => $activity->id,
+            'status' => 'pending',
+        ], 'timecreated ASC, id ASC');
 
-        $needed = peerreviewstudio_needed_assignments($activity, (int)$submission->id);
-        $assignedsomeone = false;
-        while ($needed > 0) {
-            $reviewer = peerreviewstudio_find_reviewer_for_submission($activity, $submission);
-            if (!$reviewer) {
-                break;
+        foreach ($queueentries as $queueentry) {
+            $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $queueentry->submissionid]);
+            if (!$submission || (int)$submission->userid <= 0) {
+                peerreviewstudio_close_queue_entries((int)$queueentry->submissionid, 'failed');
+                continue;
             }
 
-            $assignment = (object) [
-                'peerreviewstudioid' => $activity->id,
-                'submissionid' => $submission->id,
-                'reviewerid' => $reviewer->userid,
-                'status' => 'assigned',
-                'timeassigned' => time(),
-                'timeopened' => 0,
-                'timecompleted' => 0,
-                'timemodified' => time(),
-            ];
-            $DB->insert_record('peerreviewstudio_assignments', $assignment);
-            $assignedsomeone = true;
-            $needed--;
+            $needed = peerreviewstudio_needed_assignments($activity, (int)$submission->id);
+            if ($needed > 0) {
+                $eligible = peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission);
+                foreach (array_slice($eligible, 0, $needed) as $reviewer) {
+                    peerreviewstudio_create_assignment($activity, $submission, (int)$reviewer->userid);
+                    $created++;
+                    $needed--;
+                }
+            }
 
-            peerreviewstudio_send_notification($activity, 'reviewassigned', (int)$reviewer->userid);
-
-            $reviewersubmission = $DB->get_record('peerreviewstudio_submissions', [
-                'peerreviewstudioid' => $activity->id,
-                'userid' => $reviewer->userid,
+            $now = time();
+            $DB->update_record('peerreviewstudio_queue', (object) [
+                'id' => $queueentry->id,
+                'attempts' => (int)$queueentry->attempts + 1,
+                'lastattemptat' => $now,
+                'timemodified' => $now,
+                'status' => $needed <= 0 ? 'resolved' : 'pending',
             ]);
-            if ($reviewersubmission && in_array((string)$reviewersubmission->status, ['submitted', 'queued'], true)) {
-                $reviewersubmission->status = 'assigned';
-                $reviewersubmission->timemodified = time();
-                $DB->update_record('peerreviewstudio_submissions', $reviewersubmission);
-            }
+            peerreviewstudio_update_submission_status($activity, (int)$submission->id);
         }
-
-        if ($assignedsomeone && in_array((string)$submission->status, ['submitted', 'queued'], true)) {
-            $submission->status = 'assigned';
-            $submission->timemodified = time();
-            $DB->update_record('peerreviewstudio_submissions', $submission);
-        }
-
-        if ($needed <= 0) {
-            $queueentry->status = 'resolved';
-        }
-        $DB->update_record('peerreviewstudio_queue', $queueentry);
-    }
-}
-
-/**
- * Find a simple eligible reviewer for a submission.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $submission Submission record.
- * @return stdClass|false
- */
-function peerreviewstudio_find_reviewer_for_submission(stdClass $activity, stdClass $submission): stdClass|false {
-    $reviewers = peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission);
-    if (!$reviewers) {
-        return false;
+    } finally {
+        $lock->release();
     }
 
-    return reset($reviewers);
-}
-
-/**
- * Return eligible reviewers for one submission ordered by current load.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $submission Submission record.
- * @return array
- */
-function peerreviewstudio_get_eligible_reviewers_for_submission(stdClass $activity, stdClass $submission): array {
-    global $DB;
-
-    $authorgroups = peerreviewstudio_get_user_group_ids((object)['id' => $activity->course], (int)$submission->userid);
-    $namefields = \core_user\fields::for_name()->get_sql('u', false, '', '', false)->selects;
-
-    $sql = "SELECT s.id, s.userid, s.status, s.timesubmitted, {$namefields}, COUNT(a.id) AS assignmentcount
-              FROM {peerreviewstudio_submissions} s
-              JOIN {user} u ON u.id = s.userid
-         LEFT JOIN {peerreviewstudio_assignments} a ON a.reviewerid = s.userid
-               AND a.peerreviewstudioid = s.peerreviewstudioid
-             WHERE s.peerreviewstudioid = :activityid
-               AND s.userid <> :userid
-               AND s.status IN ('submitted', 'queued', 'assigned', 'partiallyreviewed', 'reviewed', 'closed')
-               AND NOT EXISTS (
-                    SELECT 1
-                      FROM {peerreviewstudio_assignments} ax
-                     WHERE ax.submissionid = :submissionid
-                       AND ax.reviewerid = s.userid
-               )
-          GROUP BY s.id, s.userid, s.status, s.timesubmitted, {$namefields}
-          ORDER BY assignmentcount ASC, s.timesubmitted ASC, s.id ASC";
-
-    $candidates = $DB->get_records_sql($sql, [
-        'activityid' => $activity->id,
-        'userid' => $submission->userid,
-        'submissionid' => $submission->id,
-    ]);
-
-    $eligible = [];
-    foreach ($candidates as $candidate) {
-        $evaluation = peerreviewstudio_evaluate_reviewer_candidate($activity, $submission, $candidate, $authorgroups);
-        if ($evaluation['eligible']) {
-            $eligible[] = $candidate;
-        }
-    }
-
-    return $eligible;
-}
-
-/**
- * Return rejected reviewer candidates with reasons.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $submission Submission record.
- * @return array
- */
-function peerreviewstudio_get_ineligible_reviewers_for_submission(stdClass $activity, stdClass $submission): array {
-    global $DB;
-
-    $authorgroups = peerreviewstudio_get_user_group_ids((object)['id' => $activity->course], (int)$submission->userid);
-    $sql = "SELECT s.id, s.userid, s.status, u.firstname, u.lastname
-              FROM {peerreviewstudio_submissions} s
-              JOIN {user} u ON u.id = s.userid
-             WHERE s.peerreviewstudioid = :activityid
-               AND s.userid <> :userid
-          ORDER BY s.timesubmitted ASC, s.id ASC";
-    $candidates = $DB->get_records_sql($sql, [
-        'activityid' => $activity->id,
-        'userid' => $submission->userid,
-    ]);
-    $rejected = [];
-    foreach ($candidates as $candidate) {
-        $evaluation = peerreviewstudio_evaluate_reviewer_candidate($activity, $submission, $candidate, $authorgroups);
-        if ($evaluation['eligible']) {
-            continue;
-        }
-        $candidate->reasonlabels = peerreviewstudio_eligibility_reason_labels($evaluation['reasons']);
-        $rejected[] = $candidate;
-    }
-
-    return $rejected;
+    return $created;
 }
 
 /**
@@ -1343,7 +1824,7 @@ function peerreviewstudio_get_ineligible_reviewers_for_submission(stdClass $acti
  * @param stdClass $activity Activity record.
  * @param int $submissionid Submission id.
  * @param int $reviewerid Reviewer user id.
- * @return bool
+ * @return bool False when the reviewer is not eligible for the submission.
  */
 function peerreviewstudio_assign_submission_to_reviewer(stdClass $activity, int $submissionid, int $reviewerid): bool {
     global $DB, $USER;
@@ -1353,61 +1834,31 @@ function peerreviewstudio_assign_submission_to_reviewer(stdClass $activity, int 
         'peerreviewstudioid' => $activity->id,
     ], '*', MUST_EXIST);
 
-    if ((int)$submission->userid === $reviewerid) {
+    $lock = peerreviewstudio_get_lock('queue_' . (int)$activity->id);
+    if (!$lock) {
         return false;
     }
-
-    $eligible = peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission);
-    $selected = null;
-    foreach ($eligible as $candidate) {
-        if ((int)$candidate->userid === $reviewerid) {
-            $selected = $candidate;
-            break;
+    try {
+        $selected = null;
+        foreach (peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission) as $candidate) {
+            if ((int)$candidate->userid === $reviewerid) {
+                $selected = $candidate;
+                break;
+            }
         }
-    }
-    if (!$selected) {
-        return false;
-    }
+        if (!$selected) {
+            return false;
+        }
 
-    $now = time();
-    $assignment = (object) [
-        'peerreviewstudioid' => $activity->id,
-        'submissionid' => $submission->id,
-        'reviewerid' => $reviewerid,
-        'status' => 'assigned',
-        'timeassigned' => $now,
-        'timeopened' => 0,
-        'timecompleted' => 0,
-        'timemodified' => $now,
-    ];
-    $DB->insert_record('peerreviewstudio_assignments', $assignment);
-
-    peerreviewstudio_send_notification($activity, 'reviewassigned', $reviewerid);
-
-    // Only move forward from pre-review states; a submission that already
-    // received reviews keeps its progress status.
-    if (in_array((string)$submission->status, ['submitted', 'queued'], true)) {
-        $submission->status = 'assigned';
-    }
-    $submission->timemodified = $now;
-    $DB->update_record('peerreviewstudio_submissions', $submission);
-
-    $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, $reviewerid);
-    if ($reviewersubmission && in_array((string)$reviewersubmission->status, ['submitted', 'queued'], true)) {
-        $reviewersubmission->status = 'assigned';
-        $reviewersubmission->timemodified = $now;
-        $DB->update_record('peerreviewstudio_submissions', $reviewersubmission);
-    }
-
-    $pendingqueue = $DB->get_records('peerreviewstudio_queue', [
-        'peerreviewstudioid' => $activity->id,
-        'submissionid' => $submissionid,
-        'status' => 'pending',
-    ]);
-    foreach ($pendingqueue as $queueentry) {
-        $queueentry->status = 'resolved';
-        $queueentry->timemodified = $now;
-        $DB->update_record('peerreviewstudio_queue', $queueentry);
+        $assignment = peerreviewstudio_create_assignment($activity, $submission, $reviewerid);
+        // A tutor stepping in restarts the automatic follow-up cycle.
+        $DB->set_field('peerreviewstudio_submissions', 'timeescalated', 0, ['id' => $submissionid]);
+        if (peerreviewstudio_needed_assignments($activity, $submissionid) <= 0) {
+            peerreviewstudio_close_queue_entries($submissionid);
+        }
+        peerreviewstudio_update_submission_status($activity, $submissionid);
+    } finally {
+        $lock->release();
     }
 
     $event = \mod_peerreviewstudio\event\submission_manually_assigned::create([
@@ -1427,80 +1878,372 @@ function peerreviewstudio_assign_submission_to_reviewer(stdClass $activity, int 
 }
 
 /**
- * Derive tutor incident rows from already-computed dashboard rows.
+ * Cancel one open review assignment.
  *
- * @param array $rows Rows produced by peerreviewstudio_get_tutor_submission_rows().
- * @return array
+ * @param stdClass $activity Activity record.
+ * @param stdClass $assignment Open assignment record.
+ * @param bool $notify Whether to tell the reviewer the task was withdrawn.
+ * @return void
  */
-function peerreviewstudio_derive_incident_rows(array $rows): array {
-    $incidents = [];
-    foreach ($rows as $row) {
-        $incidenttype = '';
-        if ((int)$row->pendingqueuecount > 0 && empty($row->eligiblereviewers)) {
-            $incidenttype = 'noreviewers';
-        } else if ((int)$row->pendingqueuecount > 0) {
-            $incidenttype = 'stuckqueue';
-        } else if (in_array((string)$row->status, ['submitted', 'queued'], true)
-                && !(int)$row->openassignedcount && !(int)$row->completedcount) {
-            $incidenttype = 'unassigned';
+function peerreviewstudio_cancel_assignment(stdClass $activity, stdClass $assignment, bool $notify = true): void {
+    global $DB;
+
+    $DB->update_record('peerreviewstudio_assignments', (object) [
+        'id' => $assignment->id,
+        'status' => 'cancelled',
+        'timemodified' => time(),
+    ]);
+
+    // Only reviewers who were told about the task need to hear it is gone.
+    if ($notify && (int)$assignment->timenotified > 0 && (int)$assignment->reviewerid > 0) {
+        peerreviewstudio_send_notification($activity, 'reviewwithdrawn', (int)$assignment->reviewerid);
+    }
+}
+
+/**
+ * Requeue a submission for another assignment attempt.
+ *
+ * Open reviewer assignments are withdrawn and the matching starts again;
+ * reviews already received are kept.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $submissionid Submission id.
+ * @return void
+ */
+function peerreviewstudio_requeue_submission(stdClass $activity, int $submissionid): void {
+    global $DB, $USER;
+
+    $submission = $DB->get_record('peerreviewstudio_submissions', [
+        'id' => $submissionid,
+        'peerreviewstudioid' => $activity->id,
+    ], '*', MUST_EXIST);
+
+    $openassignments = $DB->get_records('peerreviewstudio_assignments', [
+        'submissionid' => $submissionid,
+        'status' => 'assigned',
+    ]);
+    foreach ($openassignments as $assignment) {
+        peerreviewstudio_cancel_assignment($activity, $assignment);
+    }
+
+    // A manual requeue is a fresh start: allow the automatic follow-up
+    // cycle (reassignment, fallback, escalation) to run again.
+    $DB->update_record('peerreviewstudio_submissions', (object) [
+        'id' => $submissionid,
+        'timeescalated' => 0,
+        'timemodified' => time(),
+    ]);
+
+    $event = \mod_peerreviewstudio\event\submission_requeued::create([
+        'objectid' => $submission->id,
+        'context' => peerreviewstudio_get_activity_context((int)$activity->id),
+        'userid' => (int)($USER->id ?? 0),
+        'relateduserid' => (int)$submission->userid,
+        'other' => [
+            'peerreviewstudioid' => (int)$activity->id,
+            'cancelledassignments' => count($openassignments),
+        ],
+    ]);
+    $event->trigger();
+
+    if (peerreviewstudio_needed_assignments($activity, $submissionid) > 0) {
+        peerreviewstudio_queue_submission($activity, $submissionid);
+    }
+    peerreviewstudio_process_assignment_queue($activity);
+    peerreviewstudio_update_submission_status($activity, $submissionid);
+    peerreviewstudio_refresh_submission_grade($activity, $submissionid);
+}
+
+// Follow-up of unresolved reviews.
+
+/**
+ * Withdraw one open review assignment that will not be completed.
+ *
+ * When reassignment is requested the submission is queued again, unless
+ * the automatic reassignment cap has been reached.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass $assignment Open assignment record.
+ * @param bool $tryreassign Whether to queue the submission for reassignment.
+ * @return void
+ */
+function peerreviewstudio_expire_assignment(stdClass $activity, stdClass $assignment, bool $tryreassign): void {
+    global $DB;
+
+    // When the review deadline has simply passed there is nothing to hand
+    // over to somebody else, so the reviewer is not told about a withdrawal.
+    peerreviewstudio_cancel_assignment($activity, $assignment, $tryreassign);
+
+    if ($tryreassign && !empty($activity->autoassignenabled)) {
+        $cancelled = $DB->count_records('peerreviewstudio_assignments', [
+            'submissionid' => $assignment->submissionid,
+            'status' => 'cancelled',
+        ]);
+        if (
+            $cancelled <= PEERREVIEWSTUDIO_MAX_AUTO_REASSIGNMENTS
+                && peerreviewstudio_needed_assignments($activity, (int)$assignment->submissionid) > 0
+        ) {
+            peerreviewstudio_queue_submission($activity, (int)$assignment->submissionid);
+        }
+    }
+
+    peerreviewstudio_update_submission_status($activity, (int)$assignment->submissionid);
+}
+
+/**
+ * Return the tutors who should hear about one learner's unresolved submission.
+ *
+ * In separate groups mode only tutors who share a group with the author
+ * (or can access every group) are included.
+ *
+ * @param stdClass $cm Course module record.
+ * @param context_module $context Module context.
+ * @param int $authorid Submission author user id.
+ * @return int[] Tutor user ids.
+ */
+function peerreviewstudio_get_escalation_tutors(stdClass $cm, context_module $context, int $authorid): array {
+    $tutors = get_enrolled_users($context, 'mod/peerreviewstudio:manageassignments', 0, 'u.id', null, 0, 0, true);
+    $tutorids = array_map('intval', array_keys($tutors));
+
+    if (groups_get_activity_groupmode($cm) != SEPARATEGROUPS) {
+        return $tutorids;
+    }
+
+    $authorgroups = array_keys(groups_get_all_groups((int)$cm->course, $authorid, (int)$cm->groupingid, 'g.id'));
+    $result = [];
+    foreach ($tutorids as $tutorid) {
+        if (has_capability('moodle/site:accessallgroups', $context, $tutorid)) {
+            $result[] = $tutorid;
+            continue;
+        }
+        $tutorgroups = array_keys(groups_get_all_groups((int)$cm->course, $tutorid, (int)$cm->groupingid, 'g.id'));
+        if (array_intersect($authorgroups, $tutorgroups)) {
+            $result[] = $tutorid;
+        }
+    }
+
+    return $result;
+}
+
+/**
+ * Escalate submissions with no feedback and no automatic remedy left.
+ *
+ * A submission qualifies when it has received zero submitted reviews, has
+ * no open assignment in flight, was not escalated before, and one of the
+ * dead ends applies: the scheduled review window is over, the automatic
+ * reassignment cap was reached, or its queue entry has been waiting for a
+ * reviewer for longer than the reassignment threshold.
+ *
+ * The preferred remedy is the optional AI fallback review; otherwise the
+ * tutors receive one digest per run listing the learners concerned.
+ *
+ * @param stdClass $activity Activity record.
+ * @return int Number of submissions escalated.
+ */
+function peerreviewstudio_escalate_unresolved_submissions(stdClass $activity): int {
+    global $DB;
+
+    $now = time();
+    $reassigndays = max(0, (int)($activity->reviewreassigndays ?? 0));
+    $windowover = peerreviewstudio_review_window_over($activity);
+    $matchingallowed = peerreviewstudio_matching_allowed($activity);
+    if (!$windowover && !$matchingallowed) {
+        return 0;
+    }
+
+    $sql = "SELECT s.*
+              FROM {peerreviewstudio_submissions} s
+             WHERE s.peerreviewstudioid = :activityid
+               AND s.userid > 0
+               AND s.timeescalated = 0
+               AND s.status <> 'closed'
+               AND s.teachergradeoverride IS NULL
+               AND NOT EXISTS (SELECT 1
+                                 FROM {peerreviewstudio_assignments} ao
+                                WHERE ao.submissionid = s.id
+                                  AND ao.status = 'assigned')
+               AND NOT EXISTS (SELECT 1
+                                 FROM {peerreviewstudio_reviews} r
+                                 JOIN {peerreviewstudio_assignments} ar ON ar.id = r.assignmentid
+                                WHERE ar.submissionid = s.id
+                                  AND r.status = 'submitted')
+          ORDER BY s.timesubmitted ASC, s.id ASC";
+    $candidates = $DB->get_records_sql($sql, ['activityid' => $activity->id]);
+    if (!$candidates) {
+        return 0;
+    }
+
+    // In scheduled mode nobody could be matched before submissions closed,
+    // so the waiting clock starts there.
+    $clockfloor = 0;
+    if ((string)($activity->workflowmode ?? 'scheduled') === 'scheduled') {
+        $clockfloor = (int)($activity->timeclose ?? 0);
+    }
+
+    $usefallback = !empty($activity->aifallbackenabled)
+        && \mod_peerreviewstudio\local\ai\client::instance()->is_enabled_for($activity);
+    $fortutors = [];
+    $escalated = 0;
+
+    foreach ($candidates as $submission) {
+        $capreached = $DB->count_records('peerreviewstudio_assignments', [
+            'submissionid' => $submission->id,
+            'status' => 'cancelled',
+        ]) >= PEERREVIEWSTUDIO_MAX_AUTO_REASSIGNMENTS;
+
+        $queuestuck = false;
+        if ($reassigndays > 0 && $matchingallowed) {
+            $oldestpending = $DB->get_field_sql(
+                "SELECT MIN(timecreated)
+                   FROM {peerreviewstudio_queue}
+                  WHERE submissionid = :submissionid
+                    AND status = 'pending'",
+                ['submissionid' => $submission->id]
+            );
+            if ($oldestpending) {
+                $queuestuck = ($now - max((int)$oldestpending, $clockfloor)) >= $reassigndays * DAYSECS;
+            }
         }
 
-        if ($incidenttype === '') {
+        if (!$windowover && !$capreached && !$queuestuck) {
             continue;
         }
 
-        $incident = clone $row;
-        $incident->incidenttype = $incidenttype;
-        $incidents[] = $incident;
+        $DB->update_record('peerreviewstudio_submissions', (object) [
+            'id' => $submission->id,
+            'timeescalated' => $now,
+            'timemodified' => $now,
+        ]);
+        $escalated++;
+
+        if ($usefallback) {
+            $task = new \mod_peerreviewstudio\task\ai_fallback_review_task();
+            $task->set_custom_data(['submissionid' => (int)$submission->id]);
+            \core\task\manager::queue_adhoc_task($task);
+        } else {
+            $fortutors[] = $submission;
+        }
     }
 
-    return $incidents;
+    if ($fortutors) {
+        peerreviewstudio_notify_tutors_of_unresolved($activity, $fortutors);
+    }
+
+    return $escalated;
 }
 
 /**
- * Maximum incident rows shown on the tutor dashboard per load.
+ * Send each tutor one digest of the submissions that need their attention.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass[] $submissions Unresolved submission records.
+ * @return void
  */
-const PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS = 20;
+function peerreviewstudio_notify_tutors_of_unresolved(stdClass $activity, array $submissions): void {
+    $cm = get_coursemodule_from_instance('peerreviewstudio', (int)$activity->id, (int)$activity->course, false, IGNORE_MISSING);
+    if (!$cm) {
+        return;
+    }
+    $context = context_module::instance((int)$cm->id);
+
+    $bytutor = [];
+    foreach ($submissions as $submission) {
+        $author = \core_user::get_user((int)$submission->userid);
+        if (!$author) {
+            continue;
+        }
+        foreach (peerreviewstudio_get_escalation_tutors($cm, $context, (int)$submission->userid) as $tutorid) {
+            $bytutor[$tutorid][] = fullname($author);
+        }
+    }
+
+    foreach ($bytutor as $tutorid => $names) {
+        $listed = array_slice($names, 0, PEERREVIEWSTUDIO_MAX_ESCALATION_NAMES);
+        if (count($names) > count($listed)) {
+            $listed[] = '…';
+        }
+        peerreviewstudio_send_notification($activity, 'tutorescalation', (int)$tutorid, (object) [
+            'name' => peerreviewstudio_plain_activity_name($activity, $context),
+            'count' => count($names),
+            'students' => implode(', ', $listed),
+        ]);
+    }
+}
 
 /**
- * Return tutor incident rows for operational follow-up.
+ * Run the automatic follow-up cycle for unresolved reviews.
  *
- * Only submissions that can actually produce an incident (pending queue
- * entries, or waiting without any assignment) are scanned, capped at
- * PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS, so the incident panel stays cheap
- * on large cohorts.
+ * In order: tell reviewers about work that just became actionable, remind
+ * inactive reviewers, withdraw and reassign stale assignments, and
+ * escalate (AI fallback review or tutor digest) the submissions nothing
+ * else could resolve. The inactivity clocks only run while reviewing is
+ * actually possible, and in scheduled mode they start when the review
+ * phase opens (timeclose), not at assignment time.
  *
- * @param int $activityid Activity id.
- * @return array
+ * @param stdClass $activity Activity record.
+ * @return void
  */
-function peerreviewstudio_get_tutor_incident_rows(int $activityid): array {
+function peerreviewstudio_process_review_followups(stdClass $activity): void {
     global $DB;
 
-    $candidateids = $DB->get_fieldset_sql(
-        "SELECT s.id
-           FROM {peerreviewstudio_submissions} s
-          WHERE s.peerreviewstudioid = :activityid
-            AND (EXISTS (SELECT 1
-                           FROM {peerreviewstudio_queue} q
-                          WHERE q.submissionid = s.id
-                            AND q.status = 'pending')
-                 OR (s.status IN ('submitted', 'queued')
-                     AND NOT EXISTS (SELECT 1
-                                       FROM {peerreviewstudio_assignments} a
-                                      WHERE a.submissionid = s.id)))
-       ORDER BY s.timesubmitted ASC, s.id ASC",
-        ['activityid' => $activityid],
-        0,
-        PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS
-    );
-    if (!$candidateids) {
-        return [];
+    $now = time();
+    $reminderdays = max(0, (int)($activity->reviewreminderdays ?? 0));
+    $reassigndays = max(0, (int)($activity->reviewreassigndays ?? 0));
+    $windowover = peerreviewstudio_review_window_over($activity);
+    $reviewsallowed = peerreviewstudio_phase_allows_reviews($activity);
+
+    peerreviewstudio_notify_pending_reviewers($activity);
+
+    $openassignments = $DB->get_records('peerreviewstudio_assignments', [
+        'peerreviewstudioid' => $activity->id,
+        'status' => 'assigned',
+    ], 'timeassigned ASC, id ASC');
+
+    $requeued = false;
+    foreach ($openassignments as $assignment) {
+        if ($windowover) {
+            // The review deadline passed: this assignment can never be
+            // completed any more, so clear it out (no reassignment).
+            peerreviewstudio_expire_assignment($activity, $assignment, false);
+            continue;
+        }
+        if (!$reviewsallowed) {
+            // Reviewing is not possible yet, so reviewers are not inactive.
+            continue;
+        }
+
+        $clockstart = (int)$assignment->timeassigned;
+        if ((string)($activity->workflowmode ?? 'scheduled') === 'scheduled') {
+            $clockstart = max($clockstart, (int)($activity->timeclose ?? 0));
+        }
+
+        if ($reassigndays > 0 && ($now - $clockstart) >= $reassigndays * DAYSECS) {
+            peerreviewstudio_expire_assignment($activity, $assignment, true);
+            $requeued = true;
+            continue;
+        }
+
+        if (
+            $reminderdays > 0 && (int)$assignment->timereminded === 0
+                && ($now - $clockstart) >= $reminderdays * DAYSECS
+        ) {
+            peerreviewstudio_send_notification($activity, 'reviewreminder', (int)$assignment->reviewerid);
+            $DB->update_record('peerreviewstudio_assignments', (object) [
+                'id' => $assignment->id,
+                'timereminded' => $now,
+                'timemodified' => $now,
+            ]);
+        }
     }
 
-    $rows = peerreviewstudio_get_tutor_submission_rows($activityid, '', '', 0, 0, $candidateids);
+    if ($requeued && !empty($activity->autoassignenabled)) {
+        peerreviewstudio_process_assignment_queue($activity);
+    }
 
-    return peerreviewstudio_derive_incident_rows($rows);
+    peerreviewstudio_escalate_unresolved_submissions($activity);
 }
+
+// Reviews.
 
 /**
  * Return review assignments for a reviewer in one activity.
@@ -1515,7 +2258,45 @@ function peerreviewstudio_get_user_assignments(int $activityid, int $reviewerid)
     return $DB->get_records('peerreviewstudio_assignments', [
         'peerreviewstudioid' => $activityid,
         'reviewerid' => $reviewerid,
-    ], 'timeassigned ASC');
+    ], 'timeassigned ASC, id ASC');
+}
+
+/**
+ * Return every reviewer assignment of one submission for the tutor view,
+ * with the reviewer's name and the review (when one was submitted).
+ *
+ * @param int $submissionid Submission id.
+ * @return stdClass[] Assignment rows; 'reviewid' is null while no review exists.
+ */
+function peerreviewstudio_get_submission_assignments(int $submissionid): array {
+    global $DB;
+
+    $namefields = \core_user\fields::for_name()->get_sql('u', false, '', '', false)->selects;
+    $sql = "SELECT a.id, a.reviewerid, a.status, a.timeassigned, a.timeopened, a.timecompleted,
+                   r.id AS reviewid, r.grade, r.generalcomment, r.aireviewergrade, r.aireviewerfeedback,
+                   {$namefields}
+              FROM {peerreviewstudio_assignments} a
+         LEFT JOIN {user} u ON u.id = a.reviewerid
+         LEFT JOIN {peerreviewstudio_reviews} r ON r.assignmentid = a.id AND r.status = 'submitted'
+             WHERE a.submissionid = :submissionid
+          ORDER BY a.timeassigned ASC, a.id ASC";
+
+    return $DB->get_records_sql($sql, ['submissionid' => $submissionid]);
+}
+
+/**
+ * Record the first time a reviewer opened the work assigned to them.
+ *
+ * @param stdClass $assignment Assignment record.
+ * @return void
+ */
+function peerreviewstudio_mark_assignment_opened(stdClass $assignment): void {
+    global $DB;
+
+    if ((int)$assignment->timeopened === 0 && (string)$assignment->status === 'assigned') {
+        $assignment->timeopened = time();
+        $DB->set_field('peerreviewstudio_assignments', 'timeopened', $assignment->timeopened, ['id' => $assignment->id]);
+    }
 }
 
 /**
@@ -1527,7 +2308,7 @@ function peerreviewstudio_get_user_assignments(int $activityid, int $reviewerid)
 function peerreviewstudio_get_received_reviews(int $submissionid): array {
     global $DB;
 
-    $sql = "SELECT r.*, a.reviewerid
+    $sql = "SELECT r.*
               FROM {peerreviewstudio_reviews} r
               JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
              WHERE a.submissionid = :submissionid
@@ -1567,64 +2348,254 @@ function peerreviewstudio_get_rubric_answers_by_review(array $reviewids): array 
 }
 
 /**
- * Return a human-readable status label.
+ * Save a submitted review and update related states.
  *
- * @param string $status Raw status.
- * @return string
+ * @param stdClass $activity Activity record.
+ * @param stdClass $assignment Assignment record.
+ * @param int $reviewerid Reviewer user id.
+ * @param string $generalcomment Review comment.
+ * @param float $grade Review grade.
+ * @param array $rubricanswers Rubric answer payloads to store with the review.
+ * @return stdClass
  */
-function peerreviewstudio_status_label(string $status): string {
-    $statuskey = 'status_' . clean_param($status, PARAM_ALPHANUMEXT);
-    if (get_string_manager()->string_exists($statuskey, 'mod_peerreviewstudio')) {
-        return get_string($statuskey, 'mod_peerreviewstudio');
+function peerreviewstudio_save_review(
+    stdClass $activity,
+    stdClass $assignment,
+    int $reviewerid,
+    string $generalcomment,
+    float $grade,
+    array $rubricanswers = [],
+): stdClass {
+    global $DB;
+
+    $now = time();
+    $grade = max(0.0, $grade);
+    $grademaxsubmission = (float)($activity->grademaxsubmission ?? 0);
+    if ($grademaxsubmission > 0) {
+        $grade = min($grade, $grademaxsubmission);
     }
 
-    return s($status);
+    $transaction = $DB->start_delegated_transaction();
+
+    $record = new stdClass();
+    $record->assignmentid = $assignment->id;
+    $record->submissionid = $assignment->submissionid;
+    $record->reviewerid = $reviewerid;
+    $record->status = 'submitted';
+    $record->generalcomment = trim($generalcomment);
+    $record->grade = $grade;
+    $record->timesubmitted = $now;
+    $record->timemodified = $now;
+
+    $existingid = $DB->get_field('peerreviewstudio_reviews', 'id', ['assignmentid' => $assignment->id]);
+    if ($existingid) {
+        $record->id = $existingid;
+        $DB->update_record('peerreviewstudio_reviews', $record);
+        $DB->delete_records('peerreviewstudio_r_answers', ['reviewid' => $record->id]);
+    } else {
+        $record->timecreated = $now;
+        $record->id = $DB->insert_record('peerreviewstudio_reviews', $record);
+    }
+
+    foreach ($rubricanswers as $answer) {
+        $DB->insert_record('peerreviewstudio_r_answers', (object) [
+            'reviewid' => $record->id,
+            'criterionid' => (int)$answer['criterionid'],
+            'levelid' => (int)$answer['levelid'],
+            'commenttext' => (string)($answer['commenttext'] ?? ''),
+            'score' => (float)$answer['score'],
+        ]);
+    }
+
+    $DB->update_record('peerreviewstudio_assignments', (object) [
+        'id' => $assignment->id,
+        'status' => 'completed',
+        'timecompleted' => $now,
+        'timemodified' => $now,
+    ]);
+
+    $status = peerreviewstudio_update_submission_status($activity, (int)$assignment->submissionid);
+    if ($status === 'closed') {
+        peerreviewstudio_close_queue_entries((int)$assignment->submissionid);
+    }
+
+    peerreviewstudio_refresh_submission_grade($activity, (int)$assignment->submissionid);
+    $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, $reviewerid);
+    if ($reviewersubmission) {
+        peerreviewstudio_refresh_submission_grade($activity, (int)$reviewersubmission->id);
+    }
+
+    $transaction->allow_commit();
+
+    $event = \mod_peerreviewstudio\event\review_submitted::create([
+        'objectid' => $record->id,
+        'context' => peerreviewstudio_get_activity_context((int)$activity->id),
+        'userid' => $reviewerid,
+    ]);
+    $event->trigger();
+
+    peerreviewstudio_notify_grade_released($activity, (int)$assignment->submissionid);
+    peerreviewstudio_update_completion_state($activity, $reviewerid);
+
+    if (\mod_peerreviewstudio\local\ai\client::instance()->is_enabled_for($activity)) {
+        peerreviewstudio_queue_ai_review((int)$record->id);
+    }
+
+    return $DB->get_record('peerreviewstudio_reviews', ['id' => $record->id], '*', MUST_EXIST);
 }
 
 /**
- * Prepare submission form editor and draft files for one submission.
+ * Queue the AI second review of one peer review.
  *
- * @param context_module $context Module context.
- * @param stdClass|false $submission Existing submission or false.
- * @return array
+ * @param int $reviewid Review id.
+ * @return void
  */
-function peerreviewstudio_prepare_submission_form_data(context_module $context, stdClass|false $submission): array {
-    $data = [];
-    $data['submissiontext_editor'] = [
-        'text' => (string)($submission->onlinetext ?? ''),
-        'format' => (int)($submission->onlinetextformat ?? FORMAT_HTML),
+function peerreviewstudio_queue_ai_review(int $reviewid): void {
+    $task = new \mod_peerreviewstudio\task\ai_review_task();
+    $task->set_custom_data(['reviewid' => $reviewid]);
+    // A review that is already waiting in the queue is not queued twice.
+    \core\task\manager::queue_adhoc_task($task, true);
+}
+
+/**
+ * Queue the AI evaluations of a learner's work that have not been attempted.
+ *
+ * Content is only sent to the AI once the person who wrote it has accepted
+ * the site AI policy, so reviews submitted before that are left waiting.
+ * This picks them up: the learner's own reviews, and the reviews received by
+ * the learner's submission.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int $userid Learner who has accepted the AI policy.
+ * @return int Number of reviews queued.
+ */
+function peerreviewstudio_queue_pending_ai_reviews(stdClass $activity, int $userid): int {
+    global $DB;
+
+    $client = \mod_peerreviewstudio\local\ai\client::instance();
+    if (
+        peerreviewstudio_get_current_phase($activity) === 'closed'
+            || !$client->is_enabled_for($activity)
+            || !$client->has_accepted_policy($userid)
+    ) {
+        return 0;
+    }
+
+    // An evaluation with a time and no grade was attempted and abandoned.
+    $reviewids = $DB->get_fieldset_sql(
+        "SELECT r.id
+           FROM {peerreviewstudio_reviews} r
+           JOIN {peerreviewstudio_submissions} s ON s.id = r.submissionid
+          WHERE s.peerreviewstudioid = :activityid
+            AND r.status = 'submitted'
+            AND ((r.reviewerid = :reviewerid AND r.aireviewergrade IS NULL AND r.aitimegraded = 0)
+                 OR (s.userid = :authorid AND s.aigrade IS NULL AND s.aitimegraded = 0))
+       ORDER BY r.id",
+        ['activityid' => $activity->id, 'reviewerid' => $userid, 'authorid' => $userid]
+    );
+    foreach ($reviewids as $reviewid) {
+        peerreviewstudio_queue_ai_review((int)$reviewid);
+    }
+
+    return count($reviewids);
+}
+
+// Learner guidance.
+
+/**
+ * Work out what a learner should do next in the activity.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass|false $submission The learner's submission, or false when none.
+ * @param int $openreviews Reviews assigned to the learner and not completed yet.
+ * @param int $completedreviews Reviews the learner has completed.
+ * @param bool $cansubmit Whether the learner may submit work.
+ * @return string Key of the language string describing the next step; empty when there is none.
+ */
+function peerreviewstudio_learner_next_step(
+    stdClass $activity,
+    stdClass|false $submission,
+    int $openreviews,
+    int $completedreviews,
+    bool $cansubmit
+): string {
+    if (!$submission) {
+        if (!$cansubmit) {
+            return '';
+        }
+        return peerreviewstudio_phase_allows_submissions($activity) ? 'nextstep_submit' : 'nextstep_submissionclosed';
+    }
+
+    if ($openreviews > 0) {
+        return peerreviewstudio_phase_allows_reviews($activity) ? 'nextstep_reviewassigned' : 'nextstep_reviewsoon';
+    }
+    if (peerreviewstudio_phase_allows_feedback($activity, $submission)) {
+        return 'nextstep_viewfeedback';
+    }
+    if ($completedreviews >= max(1, (int)($activity->reviewcountrequired ?? 1))) {
+        return 'nextstep_waitforfeedback';
+    }
+
+    return 'nextstep_waitforpeer';
+}
+
+// Tutor dashboard.
+
+/**
+ * Count the submissions of an activity by workflow status.
+ *
+ * @param int $activityid Activity id.
+ * @param int|null $groupid Group to restrict to; 0 for everybody, null for nobody.
+ * @return array{total:int, waiting:int, inreview:int, complete:int}
+ */
+function peerreviewstudio_get_dashboard_counts(int $activityid, ?int $groupid = 0): array {
+    global $DB;
+
+    ['where' => $where, 'params' => $params] = peerreviewstudio_tutor_rows_where($activityid, '', '', $groupid);
+    $bystatus = $DB->get_records_sql_menu(
+        "SELECT s.status, COUNT(1)
+           FROM {peerreviewstudio_submissions} s
+           JOIN {user} u ON u.id = s.userid
+          WHERE {$where}
+       GROUP BY s.status",
+        $params
+    );
+
+    $count = static fn(array $statuses): int => (int)array_sum(array_intersect_key($bystatus, array_flip($statuses)));
+
+    return [
+        'total' => (int)array_sum($bystatus),
+        'waiting' => $count(['submitted', 'queued']),
+        'inreview' => $count(['assigned', 'partiallyreviewed']),
+        'complete' => $count(['closed']),
     ];
-
-    $draftitemid = 0;
-    file_prepare_draft_area(
-        $draftitemid,
-        $context->id,
-        'mod_peerreviewstudio',
-        'submission_files',
-        $submission ? (int)$submission->id : null,
-        [
-            'subdirs' => 0,
-            'maxfiles' => PEERREVIEWSTUDIO_MAXFILES,
-            'accepted_types' => '*',
-        ]
-    );
-    $data['submissionfiles_filemanager'] = $draftitemid;
-
-    return $data;
 }
 
 /**
- * Return stored submission files.
+ * Whether the current user may work with one learner's submission.
  *
+ * In separate groups mode a tutor without access to every group only
+ * reaches learners who share one of the tutor's groups.
+ *
+ * @param stdClass|cm_info $cm Course module.
  * @param context_module $context Module context.
- * @param int $submissionid Submission id.
- * @return stored_file[]
+ * @param int $ownerid Submission author user id.
+ * @return bool
  */
-function peerreviewstudio_get_submission_files(context_module $context, int $submissionid): array {
-    $fs = get_file_storage();
-    return array_values(
-        $fs->get_area_files($context->id, 'mod_peerreviewstudio', 'submission_files', $submissionid, 'filename', false)
-    );
+function peerreviewstudio_can_access_submission_owner($cm, context_module $context, int $ownerid): bool {
+    global $USER;
+
+    if (
+        groups_get_activity_groupmode($cm) != SEPARATEGROUPS
+            || has_capability('moodle/site:accessallgroups', $context)
+    ) {
+        return true;
+    }
+
+    $mygroups = array_keys(groups_get_all_groups((int)$cm->course, (int)$USER->id, (int)$cm->groupingid, 'g.id'));
+    $ownergroups = array_keys(groups_get_all_groups((int)$cm->course, $ownerid, (int)$cm->groupingid, 'g.id'));
+
+    return (bool)array_intersect($mygroups, $ownergroups);
 }
 
 /**
@@ -1632,14 +2603,32 @@ function peerreviewstudio_get_submission_files(context_module $context, int $sub
  *
  * @param int $activityid Activity id.
  * @param string $statusfilter Optional submission status filter.
- * @param string $search Optional name/email search.
+ * @param string $search Optional name (and, when allowed, email) search.
+ * @param int|null $groupid Group to restrict to; 0 for everybody, null for nobody.
+ * @param bool $searchemail Whether the search may also match email addresses.
  * @return array{where:string, params:array}
  */
-function peerreviewstudio_tutor_rows_where(int $activityid, string $statusfilter, string $search): array {
+function peerreviewstudio_tutor_rows_where(
+    int $activityid,
+    string $statusfilter,
+    string $search,
+    ?int $groupid = 0,
+    bool $searchemail = false
+): array {
     global $DB;
 
-    $where = 's.peerreviewstudioid = :activityid';
+    $where = 's.peerreviewstudioid = :activityid AND u.deleted = 0';
     $params = ['activityid' => $activityid];
+
+    if ($groupid === null) {
+        $where .= ' AND 1 = 0';
+    } else if ($groupid > 0) {
+        $where .= ' AND EXISTS (SELECT 1
+                                  FROM {groups_members} gmf
+                                 WHERE gmf.groupid = :filtergroupid
+                                   AND gmf.userid = s.userid)';
+        $params['filtergroupid'] = $groupid;
+    }
 
     if ($statusfilter !== '') {
         $where .= ' AND s.status = :statusfilter';
@@ -1647,11 +2636,14 @@ function peerreviewstudio_tutor_rows_where(int $activityid, string $statusfilter
     }
 
     if ($search !== '') {
-        $fullname = $DB->sql_concat('u.firstname', "' '", 'u.lastname');
-        $where .= ' AND (' . $DB->sql_like($fullname, ':searchname', false)
-            . ' OR ' . $DB->sql_like('u.email', ':searchemail', false) . ')';
+        $fullname = $DB->sql_fullname('u.firstname', 'u.lastname');
+        $conditions = [$DB->sql_like($fullname, ':searchname', false, false)];
         $params['searchname'] = '%' . $DB->sql_like_escape($search) . '%';
-        $params['searchemail'] = '%' . $DB->sql_like_escape($search) . '%';
+        if ($searchemail) {
+            $conditions[] = $DB->sql_like('u.email', ':searchemail', false, false);
+            $params['searchemail'] = '%' . $DB->sql_like_escape($search) . '%';
+        }
+        $where .= ' AND (' . implode(' OR ', $conditions) . ')';
     }
 
     return ['where' => $where, 'params' => $params];
@@ -1662,13 +2654,27 @@ function peerreviewstudio_tutor_rows_where(int $activityid, string $statusfilter
  *
  * @param int $activityid Activity id.
  * @param string $statusfilter Optional submission status filter.
- * @param string $search Optional name/email search.
+ * @param string $search Optional search.
+ * @param int|null $groupid Group to restrict to; 0 for everybody, null for nobody.
+ * @param bool $searchemail Whether the search may also match email addresses.
  * @return int
  */
-function peerreviewstudio_count_tutor_submission_rows(int $activityid, string $statusfilter = '', string $search = ''): int {
+function peerreviewstudio_count_tutor_submission_rows(
+    int $activityid,
+    string $statusfilter = '',
+    string $search = '',
+    ?int $groupid = 0,
+    bool $searchemail = false
+): int {
     global $DB;
 
-    ['where' => $where, 'params' => $params] = peerreviewstudio_tutor_rows_where($activityid, $statusfilter, $search);
+    ['where' => $where, 'params' => $params] = peerreviewstudio_tutor_rows_where(
+        $activityid,
+        $statusfilter,
+        $search,
+        $groupid,
+        $searchemail
+    );
     $sql = "SELECT COUNT(1)
               FROM {peerreviewstudio_submissions} s
               JOIN {user} u ON u.id = s.userid
@@ -1681,15 +2687,16 @@ function peerreviewstudio_count_tutor_submission_rows(int $activityid, string $s
  * Return tutor-facing submission rows with user and assignment counters.
  *
  * Filtering and pagination happen in SQL so that large cohorts never load
- * every submission, and the expensive per-row reviewer eligibility scan
- * only ever runs for the rows on the current page.
+ * every submission.
  *
  * @param int $activityid Activity id.
  * @param string $statusfilter Optional submission status filter.
- * @param string $search Optional name/email search.
+ * @param string $search Optional search.
  * @param int $page Zero-based page number.
  * @param int $perpage Rows per page (0 = no limit; avoid on large cohorts).
  * @param int[] $onlyids Restrict to these submission ids (empty = no restriction).
+ * @param int|null $groupid Group to restrict to; 0 for everybody, null for nobody.
+ * @param bool $searchemail Whether the search may also match email addresses.
  * @return array
  */
 function peerreviewstudio_get_tutor_submission_rows(
@@ -1698,13 +2705,20 @@ function peerreviewstudio_get_tutor_submission_rows(
     string $search = '',
     int $page = 0,
     int $perpage = 0,
-    array $onlyids = []
+    array $onlyids = [],
+    ?int $groupid = 0,
+    bool $searchemail = false
 ): array {
     global $DB;
 
-    $activity = $DB->get_record('peerreviewstudio', ['id' => $activityid], '*', MUST_EXIST);
     $namefields = \core_user\fields::for_name()->get_sql('u', false, '', '', false)->selects;
-    ['where' => $where, 'params' => $params] = peerreviewstudio_tutor_rows_where($activityid, $statusfilter, $search);
+    ['where' => $where, 'params' => $params] = peerreviewstudio_tutor_rows_where(
+        $activityid,
+        $statusfilter,
+        $search,
+        $groupid,
+        $searchemail
+    );
     if ($onlyids) {
         [$idsql, $idparams] = $DB->get_in_or_equal(array_map('intval', $onlyids), SQL_PARAMS_NAMED, 'onlyid');
         $where .= " AND s.id {$idsql}";
@@ -1721,11 +2735,9 @@ function peerreviewstudio_get_tutor_submission_rows(
                    s.finalgrade,
                    s.teachergradeoverride,
                    s.aigrade,
+                   s.timeescalated,
                    {$namefields},
                    u.email,
-                   (SELECT COUNT(1)
-                      FROM {peerreviewstudio_assignments} a
-                     WHERE a.submissionid = s.id) AS assignedcount,
                    (SELECT COUNT(1)
                       FROM {peerreviewstudio_assignments} ao
                      WHERE ao.submissionid = s.id
@@ -1755,445 +2767,119 @@ function peerreviewstudio_get_tutor_submission_rows(
           ORDER BY s.timesubmitted ASC, s.id ASC";
 
     $limitfrom = $perpage > 0 ? max(0, $page) * $perpage : 0;
-    $rows = $DB->get_records_sql($sql, $params, $limitfrom, $perpage);
+
+    return $DB->get_records_sql($sql, $params, $limitfrom, $perpage);
+}
+
+/**
+ * Return tutor incident rows for operational follow-up.
+ *
+ * Only submissions that can actually produce an incident are scanned,
+ * capped at PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS, so the incident panel
+ * stays cheap on large cohorts. Incidents are:
+ * - escalated: the automatic cycle gave up and a tutor must act;
+ * - noreviewers: waiting for a reviewer and nobody is eligible;
+ * - stuckqueue: waiting for a reviewer although candidates exist;
+ * - unassigned: automatic matching is off and nobody was assigned.
+ *
+ * While matching has not started yet (for example during the scheduled
+ * submission phase) waiting submissions are expected, not incidents.
+ *
+ * @param stdClass $activity Activity record.
+ * @param int|null $groupid Group to restrict to; 0 for everybody, null for nobody.
+ * @return array
+ */
+function peerreviewstudio_get_tutor_incident_rows(stdClass $activity, ?int $groupid = 0): array {
+    global $DB;
+
+    if ($groupid === null) {
+        return [];
+    }
+
+    $matchingallowed = peerreviewstudio_matching_allowed($activity);
+    $conditions = ["(s.timeescalated > 0 AND s.status <> 'closed' AND s.teachergradeoverride IS NULL)"];
+    if ($matchingallowed) {
+        $conditions[] = "EXISTS (SELECT 1
+                                   FROM {peerreviewstudio_queue} q
+                                  WHERE q.submissionid = s.id
+                                    AND q.status = 'pending')";
+        if (empty($activity->autoassignenabled)) {
+            $conditions[] = "s.status = 'submitted'";
+        }
+    }
+
+    $candidateids = $DB->get_fieldset_sql(
+        "SELECT s.id
+           FROM {peerreviewstudio_submissions} s
+          WHERE s.peerreviewstudioid = :activityid
+            AND s.userid > 0
+            AND (" . implode(' OR ', $conditions) . ")
+       ORDER BY s.timesubmitted ASC, s.id ASC",
+        ['activityid' => $activity->id],
+        0,
+        PEERREVIEWSTUDIO_MAX_INCIDENT_ROWS
+    );
+    if (!$candidateids) {
+        return [];
+    }
+
+    $rows = peerreviewstudio_get_tutor_submission_rows((int)$activity->id, '', '', 0, 0, $candidateids, $groupid);
+    $incidents = [];
     foreach ($rows as $row) {
-        $submission = (object) [
+        $candidates = peerreviewstudio_get_reviewer_candidates($activity, (object) [
             'id' => (int)$row->id,
             'userid' => (int)$row->userid,
-            'status' => (string)$row->status,
-        ];
-        $ineligible = peerreviewstudio_get_ineligible_reviewers_for_submission($activity, $submission);
-        $row->eligiblereviewers = peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission);
-        $row->eligiblecount = count($row->eligiblereviewers);
-        $row->ineligiblecount = count($ineligible);
-        $row->ineligiblesummary = peerreviewstudio_ineligible_candidates_summary($ineligible);
-    }
-
-    return $rows;
-}
-
-/**
- * Requeue a submission for another assignment attempt.
- *
- * @param stdClass $activity Activity record.
- * @param int $submissionid Submission id.
- * @return void
- */
-function peerreviewstudio_requeue_submission(stdClass $activity, int $submissionid): void {
-    global $DB, $USER;
-
-    $submission = $DB->get_record('peerreviewstudio_submissions', [
-        'id' => $submissionid,
-        'peerreviewstudioid' => $activity->id,
-    ], '*', MUST_EXIST);
-
-    $openassignments = $DB->get_records('peerreviewstudio_assignments', [
-        'submissionid' => $submissionid,
-        'status' => 'assigned',
-    ]);
-    foreach ($openassignments as $assignment) {
-        $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, (int)$assignment->reviewerid);
-        $assignment->status = 'cancelled';
-        $assignment->timemodified = time();
-        $DB->update_record('peerreviewstudio_assignments', $assignment);
-
-        if ($reviewersubmission) {
-            $remaining = $DB->count_records('peerreviewstudio_assignments', [
-                'peerreviewstudioid' => $activity->id,
-                'reviewerid' => $assignment->reviewerid,
-                'status' => 'assigned',
-            ]);
-            if ($remaining === 0 && (string)$reviewersubmission->status === 'assigned') {
-                $reviewersubmission->status = 'submitted';
-                $reviewersubmission->timemodified = time();
-                $DB->update_record('peerreviewstudio_submissions', $reviewersubmission);
-            }
-        }
-    }
-
-    $submission->status = 'queued';
-    // A manual requeue is a fresh start: allow the automatic follow-up
-    // cycle (reassignment, fallback, escalation) to run again.
-    $submission->timeescalated = 0;
-    $submission->timemodified = time();
-    $DB->update_record('peerreviewstudio_submissions', $submission);
-
-    $event = \mod_peerreviewstudio\event\submission_requeued::create([
-        'objectid' => $submission->id,
-        'context' => peerreviewstudio_get_activity_context((int)$activity->id),
-        'userid' => (int)($USER->id ?? 0),
-        'relateduserid' => (int)$submission->userid,
-        'other' => [
-            'peerreviewstudioid' => (int)$activity->id,
-            'cancelledassignments' => count($openassignments),
-        ],
-    ]);
-    $event->trigger();
-
-    peerreviewstudio_queue_submission($activity, $submissionid, 'awaiting_reviewer');
-    peerreviewstudio_process_assignment_queue($activity);
-}
-
-/**
- * Whether the review window is definitively over for one activity.
- *
- * Only scheduled mode has an irreversible review deadline. Manual mode
- * phases can be moved back by the teacher and open mode never ends, so
- * neither is treated as "over" — their unresolved reviews are handled by
- * the inactivity clocks instead.
- *
- * @param stdClass $activity Activity record.
- * @return bool
- */
-function peerreviewstudio_review_window_over(stdClass $activity): bool {
-    if ((string)($activity->workflowmode ?? 'scheduled') !== 'scheduled') {
-        return false;
-    }
-    $due = (int)($activity->timereviewdue ?? 0);
-
-    return $due > 0 && time() > $due;
-}
-
-/**
- * Cancel one open review assignment that will not be completed.
- *
- * The reviewer is notified their task was withdrawn, their own submission
- * status is downgraded if this was their last open review, and (when
- * reassignment is requested) the submission is queued again unless the
- * automatic reassignment cap has been reached.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $assignment Open assignment record.
- * @param bool $tryreassign Whether to queue the submission for reassignment.
- * @return void
- */
-function peerreviewstudio_expire_assignment(stdClass $activity, stdClass $assignment, bool $tryreassign): void {
-    global $DB;
-
-    $now = time();
-    $assignment->status = 'cancelled';
-    $assignment->timemodified = $now;
-    $DB->update_record('peerreviewstudio_assignments', $assignment);
-
-    $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, (int)$assignment->reviewerid);
-    if ($reviewersubmission) {
-        $remaining = $DB->count_records('peerreviewstudio_assignments', [
-            'peerreviewstudioid' => $activity->id,
-            'reviewerid' => $assignment->reviewerid,
-            'status' => 'assigned',
         ]);
-        if ($remaining === 0 && (string)$reviewersubmission->status === 'assigned') {
-            $reviewersubmission->status = 'submitted';
-            $reviewersubmission->timemodified = $now;
-            $DB->update_record('peerreviewstudio_submissions', $reviewersubmission);
+        $row->eligiblecount = count($candidates['eligible']);
+        $row->ineligiblecount = count($candidates['ineligible']);
+        $row->ineligiblesummary = peerreviewstudio_ineligible_candidates_summary($candidates['ineligible']);
+
+        if ((int)$row->timeescalated > 0 && (string)$row->status !== 'closed') {
+            $row->incidenttype = 'escalated';
+        } else if ((int)$row->pendingqueuecount > 0) {
+            $row->incidenttype = $row->eligiblecount ? 'stuckqueue' : 'noreviewers';
+        } else {
+            $row->incidenttype = 'unassigned';
         }
+        $incidents[] = $row;
     }
 
-    peerreviewstudio_send_notification($activity, 'reviewwithdrawn', (int)$assignment->reviewerid);
-
-    if ($tryreassign && !empty($activity->autoassignenabled)) {
-        $cancelled = $DB->count_records('peerreviewstudio_assignments', [
-            'submissionid' => $assignment->submissionid,
-            'status' => 'cancelled',
-        ]);
-        if ($cancelled <= PEERREVIEWSTUDIO_MAX_AUTO_REASSIGNMENTS
-                && peerreviewstudio_needed_assignments($activity, (int)$assignment->submissionid) > 0) {
-            peerreviewstudio_queue_submission($activity, (int)$assignment->submissionid, 'awaiting_reviewer');
-        }
-    }
+    return $incidents;
 }
 
+// Data removal.
+
 /**
- * Resolve one submission that automatic reassignment could not help.
+ * Delete every piece of learner data stored for one activity.
  *
- * Preferred remedy is the optional AI fallback review (grade plus
- * feedback with no human involved); when that is not available the tutors
- * are notified so they can intervene. Either way the submission is marked
- * as escalated so this runs at most once (a manual requeue resets it).
+ * Used when the activity is deleted, when the course is reset, and when
+ * the privacy API purges a context. The rubric definition is kept.
  *
- * @param stdClass $activity Activity record.
- * @param stdClass $submission Submission record.
+ * @param int $activityid Activity id.
+ * @param context|null $context Module context, to remove the submission files too.
  * @return void
  */
-function peerreviewstudio_escalate_submission(stdClass $activity, stdClass $submission): void {
+function peerreviewstudio_delete_activity_user_data(int $activityid, ?context $context = null): void {
     global $DB;
 
-    $now = time();
-    $submission->timeescalated = $now;
-    $submission->timemodified = $now;
-    $DB->update_record('peerreviewstudio_submissions', $submission);
+    $params = ['activityid' => $activityid];
+    $assignmentsql = "SELECT a.id
+                        FROM {peerreviewstudio_assignments} a
+                       WHERE a.peerreviewstudioid = :activityid";
 
-    if (!empty($activity->aireviewenabled) && !empty($activity->aifallbackenabled)
-            && \mod_peerreviewstudio\local\ai\client::is_configured()) {
-        $task = new \mod_peerreviewstudio\task\ai_fallback_review_task();
-        $task->set_custom_data(['submissionid' => (int)$submission->id]);
-        \core\task\manager::queue_adhoc_task($task);
-        return;
-    }
-
-    $context = peerreviewstudio_get_activity_context((int)$activity->id);
-    $author = \core_user::get_user((int)$submission->userid);
-    $a = (object) [
-        'name' => format_string($activity->name),
-        'student' => $author ? fullname($author) : '',
-    ];
-    $tutors = get_users_by_capability($context, 'mod/peerreviewstudio:manageassignments', 'u.id');
-    foreach ($tutors as $tutor) {
-        peerreviewstudio_send_notification($activity, 'tutorescalation', (int)$tutor->id, $a);
-    }
-}
-
-/**
- * Escalate submissions with no feedback and no automatic remedy left.
- *
- * A submission qualifies when it has received zero submitted reviews, has
- * no open assignment in flight, was not escalated before, and one of the
- * dead ends applies: the scheduled review window is over, the automatic
- * reassignment cap was reached, or its queue entry has been pending for
- * longer than the reassignment threshold without ever finding a reviewer.
- *
- * @param stdClass $activity Activity record.
- * @return void
- */
-function peerreviewstudio_escalate_unresolved_submissions(stdClass $activity): void {
-    global $DB;
-
-    $now = time();
-    $reassigndays = max(0, (int)($activity->reviewreassigndays ?? 0));
-    $windowover = peerreviewstudio_review_window_over($activity);
-
-    $sql = "SELECT s.*
-              FROM {peerreviewstudio_submissions} s
-             WHERE s.peerreviewstudioid = :activityid
-               AND s.timeescalated = 0
-               AND s.status <> 'closed'
-               AND NOT EXISTS (SELECT 1
-                                 FROM {peerreviewstudio_assignments} ao
-                                WHERE ao.submissionid = s.id
-                                  AND ao.status = 'assigned')
-               AND NOT EXISTS (SELECT 1
-                                 FROM {peerreviewstudio_reviews} r
-                                 JOIN {peerreviewstudio_assignments} ar ON ar.id = r.assignmentid
-                                WHERE ar.submissionid = s.id
-                                  AND r.status = 'submitted')";
-    $candidates = $DB->get_records_sql($sql, ['activityid' => $activity->id]);
-
-    foreach ($candidates as $submission) {
-        $capreached = $DB->count_records('peerreviewstudio_assignments', [
-            'submissionid' => $submission->id,
-            'status' => 'cancelled',
-        ]) >= PEERREVIEWSTUDIO_MAX_AUTO_REASSIGNMENTS;
-
-        $queuestuck = false;
-        if ($reassigndays > 0) {
-            $oldestpending = $DB->get_field_sql(
-                "SELECT MIN(timecreated)
-                   FROM {peerreviewstudio_queue}
-                  WHERE submissionid = :submissionid
-                    AND status = 'pending'",
-                ['submissionid' => $submission->id]
-            );
-            $queuestuck = $oldestpending && ($now - (int)$oldestpending) >= $reassigndays * DAYSECS;
-        }
-
-        if (!$windowover && !$capreached && !$queuestuck) {
-            continue;
-        }
-
-        peerreviewstudio_escalate_submission($activity, $submission);
-    }
-}
-
-/**
- * Run the automatic follow-up cycle for unresolved reviews.
- *
- * Three layers, all opt-out via the per-activity day thresholds:
- * reminders to inactive reviewers, expiry plus reassignment of stale
- * assignments, and escalation (AI fallback review or tutor notification)
- * of submissions nothing else could resolve. The inactivity clocks only
- * run while reviewing is actually possible, and in scheduled mode they
- * start at the review phase opening (timeclose), not at assignment time.
- *
- * @param stdClass $activity Activity record.
- * @return void
- */
-function peerreviewstudio_process_review_followups(stdClass $activity): void {
-    global $DB;
-
-    $now = time();
-    $reminderdays = max(0, (int)($activity->reviewreminderdays ?? 0));
-    $reassigndays = max(0, (int)($activity->reviewreassigndays ?? 0));
-    $windowover = peerreviewstudio_review_window_over($activity);
-    $reviewsallowed = peerreviewstudio_phase_allows_reviews($activity);
-
-    $openassignments = $DB->get_records('peerreviewstudio_assignments', [
-        'peerreviewstudioid' => $activity->id,
-        'status' => 'assigned',
-    ], 'timeassigned ASC, id ASC');
-
-    $requeued = false;
-    foreach ($openassignments as $assignment) {
-        if ($windowover) {
-            // The review deadline passed: this assignment can never be
-            // completed anymore, so clear it out (no reassignment).
-            peerreviewstudio_expire_assignment($activity, $assignment, false);
-            continue;
-        }
-        if (!$reviewsallowed) {
-            // Reviewing is not possible yet (e.g. scheduled submission
-            // phase), so reviewers are not inactive: clocks do not run.
-            continue;
-        }
-
-        $clockstart = (int)$assignment->timeassigned;
-        if ((string)($activity->workflowmode ?? 'scheduled') === 'scheduled') {
-            $clockstart = max($clockstart, (int)($activity->timeclose ?? 0));
-        }
-
-        if ($reassigndays > 0 && ($now - $clockstart) >= $reassigndays * DAYSECS) {
-            peerreviewstudio_expire_assignment($activity, $assignment, true);
-            $requeued = true;
-            continue;
-        }
-
-        if ($reminderdays > 0 && (int)$assignment->timereminded === 0
-                && ($now - $clockstart) >= $reminderdays * DAYSECS) {
-            peerreviewstudio_send_notification($activity, 'reviewreminder', (int)$assignment->reviewerid);
-            $assignment->timereminded = $now;
-            $assignment->timemodified = $now;
-            $DB->update_record('peerreviewstudio_assignments', $assignment);
-        }
-    }
-
-    if ($requeued && !empty($activity->autoassignenabled)) {
-        peerreviewstudio_process_assignment_queue($activity);
-    }
-
-    peerreviewstudio_escalate_unresolved_submissions($activity);
-}
-
-/**
- * Save a submitted review and update related states.
- *
- * @param stdClass $activity Activity record.
- * @param stdClass $assignment Assignment record.
- * @param int $reviewerid Reviewer user id.
- * @param string $generalcomment Review comment.
- * @param float $grade Review grade.
- * @param array $rubricanswers Rubric answer payloads to store with the review.
- * @return stdClass
- */
-function peerreviewstudio_save_review(
-    stdClass $activity,
-    stdClass $assignment,
-    int $reviewerid,
-    string $generalcomment,
-    float $grade,
-    array $rubricanswers = [],
-): stdClass {
-    global $DB;
-
-    $now = time();
-    $review = $DB->get_record('peerreviewstudio_reviews', [
-        'assignmentid' => $assignment->id,
-        'reviewerid' => $reviewerid,
-    ]);
-
-    $grade = max(0.0, $grade);
-    $grademaxsubmission = (float)($activity->grademaxsubmission ?? 0);
-    if ($grademaxsubmission > 0) {
-        $grade = min($grade, $grademaxsubmission);
-    }
-
-    $record = new stdClass();
-    $record->assignmentid = $assignment->id;
-    $record->submissionid = $assignment->submissionid;
-    $record->reviewerid = $reviewerid;
-    $record->status = 'submitted';
-    $record->generalcomment = trim($generalcomment);
-    $record->grade = $grade;
-    $record->timesubmitted = $now;
-    $record->timemodified = $now;
-
-    if ($review) {
-        $record->id = $review->id;
-        $DB->update_record('peerreviewstudio_reviews', $record);
-        $DB->delete_records('peerreviewstudio_r_answers', ['reviewid' => $record->id]);
-    } else {
-        $record->timecreated = $now;
-        $record->id = $DB->insert_record('peerreviewstudio_reviews', $record);
-    }
-
-    foreach ($rubricanswers as $answer) {
-        $answerrecord = (object) [
-            'reviewid' => $record->id,
-            'criterionid' => (int)$answer['criterionid'],
-            'levelid' => (int)$answer['levelid'],
-            'commenttext' => (string)($answer['commenttext'] ?? ''),
-            'score' => (float)$answer['score'],
-        ];
-        $DB->insert_record('peerreviewstudio_r_answers', $answerrecord);
-    }
-
-    $assignment->status = 'completed';
-    $assignment->timecompleted = $now;
-    $assignment->timemodified = $now;
-    $DB->update_record('peerreviewstudio_assignments', $assignment);
-
-    $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, $reviewerid);
-    if ($reviewersubmission && (string)$reviewersubmission->status !== 'closed') {
-        // A 'closed' submission already received all its reviews; do not
-        // downgrade it because its owner completed reviewing work.
-        $remaining = $DB->count_records('peerreviewstudio_assignments', [
-            'peerreviewstudioid' => $activity->id,
-            'reviewerid' => $reviewerid,
-            'status' => 'assigned',
-        ]);
-        $reviewersubmission->status = $remaining > 0 ? 'partiallyreviewed' : 'reviewed';
-        $reviewersubmission->timemodified = $now;
-        $DB->update_record('peerreviewstudio_submissions', $reviewersubmission);
-    }
-
-    $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $assignment->submissionid], '*', MUST_EXIST);
-    $completedreviews = $DB->count_records_sql(
-        "SELECT COUNT(r.id)
-           FROM {peerreviewstudio_reviews} r
-           JOIN {peerreviewstudio_assignments} a ON a.id = r.assignmentid
-          WHERE a.submissionid = :submissionid
-            AND r.status = 'submitted'",
-        ['submissionid' => $submission->id],
+    $DB->delete_records_select(
+        'peerreviewstudio_r_answers',
+        "reviewid IN (SELECT r.id
+                        FROM {peerreviewstudio_reviews} r
+                       WHERE r.assignmentid IN ($assignmentsql))",
+        $params
     );
+    $DB->delete_records_select('peerreviewstudio_reviews', "assignmentid IN ($assignmentsql)", $params);
+    $DB->delete_records('peerreviewstudio_assignments', ['peerreviewstudioid' => $activityid]);
+    $DB->delete_records('peerreviewstudio_queue', ['peerreviewstudioid' => $activityid]);
+    $DB->delete_records('peerreviewstudio_submissions', ['peerreviewstudioid' => $activityid]);
 
-    if ($completedreviews >= (int)$activity->reviewsreceivedtarget) {
-        $submission->status = 'closed';
-    } else if ($completedreviews > 0) {
-        $submission->status = 'partiallyreviewed';
-    } else if (!empty($activity->autoassignenabled)) {
-        $submission->status = 'assigned';
+    if ($context) {
+        get_file_storage()->delete_area_files($context->id, 'mod_peerreviewstudio', 'submission_files');
     }
-    $submission->timemodified = $now;
-    $DB->update_record('peerreviewstudio_submissions', $submission);
-
-    peerreviewstudio_refresh_submission_grade($activity, (int)$assignment->submissionid);
-    $reviewersubmission = peerreviewstudio_get_user_submission((int)$activity->id, $reviewerid);
-    if ($reviewersubmission) {
-        peerreviewstudio_refresh_submission_grade($activity, (int)$reviewersubmission->id);
-    }
-
-    $event = \mod_peerreviewstudio\event\review_submitted::create([
-        'objectid' => $record->id,
-        'context' => peerreviewstudio_get_activity_context((int)$activity->id),
-        'userid' => $reviewerid,
-    ]);
-    $event->trigger();
-
-    peerreviewstudio_send_notification($activity, 'gradereceived', (int)$submission->userid);
-
-    if (!empty($activity->aireviewenabled) && \mod_peerreviewstudio\local\ai\client::is_configured()) {
-        $aitask = new \mod_peerreviewstudio\task\ai_review_task();
-        $aitask->set_custom_data(['reviewid' => (int)$record->id]);
-        \core\task\manager::queue_adhoc_task($aitask);
-    }
-
-    return $DB->get_record('peerreviewstudio_reviews', ['id' => $record->id], '*', MUST_EXIST);
 }

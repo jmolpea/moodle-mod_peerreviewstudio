@@ -84,7 +84,14 @@ function xmldb_peerreviewstudio_upgrade(int $oldversion): bool {
         }
 
         $field = new xmldb_field(
-            'avoidreciprocalreviews', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '1', 'reviewpoolmode'
+            'avoidreciprocalreviews',
+            XMLDB_TYPE_INTEGER,
+            '1',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '1',
+            'reviewpoolmode'
         );
         if (!$dbman->field_exists($table, $field)) {
             $dbman->add_field($table, $field);
@@ -235,11 +242,29 @@ function xmldb_peerreviewstudio_upgrade(int $oldversion): bool {
         // per-assignment reminder timestamp, and per-submission escalation
         // timestamp.
         $table = new xmldb_table('peerreviewstudio');
-        $field = new xmldb_field('reviewreminderdays', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '2', 'avoidreciprocalreviews');
+        $field = new xmldb_field(
+            'reviewreminderdays',
+            XMLDB_TYPE_INTEGER,
+            '4',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '2',
+            'avoidreciprocalreviews'
+        );
         if (!$dbman->field_exists($table, $field)) {
             $dbman->add_field($table, $field);
         }
-        $field = new xmldb_field('reviewreassigndays', XMLDB_TYPE_INTEGER, '4', null, XMLDB_NOTNULL, null, '4', 'reviewreminderdays');
+        $field = new xmldb_field(
+            'reviewreassigndays',
+            XMLDB_TYPE_INTEGER,
+            '4',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '4',
+            'reviewreminderdays'
+        );
         if (!$dbman->field_exists($table, $field)) {
             $dbman->add_field($table, $field);
         }
@@ -284,6 +309,233 @@ function xmldb_peerreviewstudio_upgrade(int $oldversion): bool {
         }
 
         upgrade_mod_savepoint(true, 2026111200, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111300) {
+        // Activity completion rules and the grade release marker.
+        $table = new xmldb_table('peerreviewstudio');
+        $field = new xmldb_field('completionsubmit', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'aipromptreviewer');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $field = new xmldb_field('completionreviews', XMLDB_TYPE_INTEGER, '1', null, XMLDB_NOTNULL, null, '0', 'completionsubmit');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+        $field = new xmldb_field(
+            'timegradesreleased',
+            XMLDB_TYPE_INTEGER,
+            '10',
+            null,
+            XMLDB_NOTNULL,
+            null,
+            '0',
+            'completionreviews'
+        );
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+        }
+
+        // When the author was told their feedback and grade are available.
+        $table = new xmldb_table('peerreviewstudio_submissions');
+        $field = new xmldb_field('timegradenotified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timeescalated');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+            // Authors who already have reviews were notified by the previous
+            // per-review message: they must not be notified again.
+            $DB->execute(
+                "UPDATE {peerreviewstudio_submissions}
+                    SET timegradenotified = timemodified
+                  WHERE id IN (SELECT a.submissionid
+                                 FROM {peerreviewstudio_assignments} a
+                                 JOIN {peerreviewstudio_reviews} r ON r.assignmentid = a.id
+                                WHERE r.status = 'submitted')"
+            );
+        }
+
+        // When the reviewer was told about the assignment.
+        $table = new xmldb_table('peerreviewstudio_assignments');
+        $field = new xmldb_field('timenotified', XMLDB_TYPE_INTEGER, '10', null, XMLDB_NOTNULL, null, '0', 'timeassigned');
+        if (!$dbman->field_exists($table, $field)) {
+            $dbman->add_field($table, $field);
+            // Until now reviewers were always notified at assignment time.
+            $DB->execute("UPDATE {peerreviewstudio_assignments} SET timenotified = timeassigned");
+        }
+
+        upgrade_mod_savepoint(true, 2026111300, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111301) {
+        // Replace the low-value single-column status indexes with the
+        // composite indexes the queries actually use.
+        $indexchanges = [
+            'peerreviewstudio_submissions' => [
+                'drop' => [['statusix', ['status']]],
+                'add' => [['activitystatusix', ['peerreviewstudioid', 'status']], ['userix', ['userid']]],
+            ],
+            'peerreviewstudio_assignments' => [
+                'drop' => [['statusix', ['status']]],
+                'add' => [
+                    ['activityreviewerix', ['peerreviewstudioid', 'reviewerid', 'status']],
+                    ['activitystatusix', ['peerreviewstudioid', 'status']],
+                ],
+            ],
+            'peerreviewstudio_reviews' => [
+                'drop' => [['statusix', ['status']]],
+                'add' => [['reviewerix', ['reviewerid']]],
+            ],
+            'peerreviewstudio_queue' => [
+                'drop' => [['statusix', ['status']]],
+                'add' => [],
+            ],
+        ];
+        foreach ($indexchanges as $tablename => $changes) {
+            $table = new xmldb_table($tablename);
+            foreach ($changes['drop'] as [$indexname, $indexfields]) {
+                $index = new xmldb_index($indexname, XMLDB_INDEX_NOTUNIQUE, $indexfields);
+                if ($dbman->index_exists($table, $index)) {
+                    $dbman->drop_index($table, $index);
+                }
+            }
+            foreach ($changes['add'] as [$indexname, $indexfields]) {
+                $index = new xmldb_index($indexname, XMLDB_INDEX_NOTUNIQUE, $indexfields);
+                if (!$dbman->index_exists($table, $index)) {
+                    $dbman->add_index($table, $index);
+                }
+            }
+        }
+
+        // Foreign keys on the rubric answers; each one is backed by an index.
+        $table = new xmldb_table('peerreviewstudio_r_answers');
+        $keys = [
+            'criterionfk' => ['criterionid', 'peerreviewstudio_r_criteria'],
+            'levelfk' => ['levelid', 'peerreviewstudio_r_levels'],
+        ];
+        foreach ($keys as $keyname => [$keyfield, $reftable]) {
+            $index = new xmldb_index($keyname, XMLDB_INDEX_NOTUNIQUE, [$keyfield]);
+            if (!$dbman->index_exists($table, $index)) {
+                $dbman->add_key($table, new xmldb_key($keyname, XMLDB_KEY_FOREIGN, [$keyfield], $reftable, ['id']));
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026111301, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111302) {
+        // The module capabilities used to clone their permissions from core
+        // capabilities, which overrode the archetype defaults (for example,
+        // guests could see their status and non-editing teachers could not
+        // override grades). Bring every archetype role in line with the
+        // defaults declared in db/access.php.
+        $defaults = [
+            'mod/peerreviewstudio:view' => ['student', 'teacher', 'editingteacher', 'manager'],
+            'mod/peerreviewstudio:submit' => ['student'],
+            'mod/peerreviewstudio:review' => ['student'],
+            'mod/peerreviewstudio:viewownstatus' => ['student'],
+            'mod/peerreviewstudio:viewreport' => ['teacher', 'editingteacher', 'manager'],
+            'mod/peerreviewstudio:manageassignments' => ['teacher', 'editingteacher', 'manager'],
+            'mod/peerreviewstudio:grade' => ['teacher', 'editingteacher', 'manager'],
+            'mod/peerreviewstudio:manageworkflow' => ['teacher', 'editingteacher', 'manager'],
+        ];
+        $systemcontext = context_system::instance();
+        foreach ($DB->get_records('role') as $role) {
+            if ($role->archetype === '') {
+                // Custom roles without an archetype were configured by hand.
+                continue;
+            }
+            foreach ($defaults as $capability => $archetypes) {
+                if (in_array($role->archetype, $archetypes, true)) {
+                    assign_capability($capability, CAP_ALLOW, $role->id, $systemcontext->id, true);
+                } else {
+                    unassign_capability($capability, $role->id, $systemcontext->id);
+                }
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026111302, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111303) {
+        // Submission status now only describes the submission itself; the
+        // reviewing its author does for others is read from the assignments.
+        // The retired 'reviewed' value is replaced by the status derived
+        // from the reviews each submission actually received.
+        $DB->execute(
+            "UPDATE {peerreviewstudio_submissions}
+                SET status = 'partiallyreviewed'
+              WHERE status = 'reviewed'
+                AND id IN (SELECT a.submissionid
+                             FROM {peerreviewstudio_assignments} a
+                             JOIN {peerreviewstudio_reviews} r ON r.assignmentid = a.id
+                            WHERE r.status = 'submitted')"
+        );
+        $DB->execute(
+            "UPDATE {peerreviewstudio_submissions}
+                SET status = 'assigned'
+              WHERE status = 'reviewed'
+                AND id IN (SELECT a.submissionid
+                             FROM {peerreviewstudio_assignments} a
+                            WHERE a.status = 'assigned')"
+        );
+        $DB->set_field('peerreviewstudio_submissions', 'status', 'submitted', ['status' => 'reviewed']);
+
+        upgrade_mod_savepoint(true, 2026111303, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111304) {
+        // Bring every stored status in line with the new meaning: how far the
+        // submission is from having received its reviews. Closed submissions
+        // are left alone; the others are rebuilt from the stored facts, from
+        // the earliest state to the latest.
+        $submissions = '{peerreviewstudio_submissions}';
+        $DB->execute("UPDATE $submissions SET status = 'submitted' WHERE status <> 'closed'");
+        $DB->execute(
+            "UPDATE $submissions
+                SET status = 'queued'
+              WHERE status = 'submitted'
+                AND EXISTS (SELECT 1
+                              FROM {peerreviewstudio_queue} q
+                             WHERE q.submissionid = $submissions.id
+                               AND q.status = 'pending')"
+        );
+        $DB->execute(
+            "UPDATE $submissions
+                SET status = 'assigned'
+              WHERE status IN ('submitted', 'queued')
+                AND EXISTS (SELECT 1
+                              FROM {peerreviewstudio_assignments} a
+                             WHERE a.submissionid = $submissions.id
+                               AND a.status = 'assigned')"
+        );
+        $DB->execute(
+            "UPDATE $submissions
+                SET status = 'partiallyreviewed'
+              WHERE status <> 'closed'
+                AND EXISTS (SELECT 1
+                              FROM {peerreviewstudio_assignments} a
+                              JOIN {peerreviewstudio_reviews} r ON r.assignmentid = a.id
+                             WHERE a.submissionid = $submissions.id
+                               AND r.status = 'submitted')"
+        );
+
+        upgrade_mod_savepoint(true, 2026111304, 'peerreviewstudio');
+    }
+
+    if ($oldversion < 2026111305) {
+        // AI review now goes through the Moodle AI subsystem. The plugin's
+        // own provider, API key, and model settings are no longer used, and
+        // an API key must not be left behind in the database.
+        $obsolete = ['aiprovider', 'aiapikey'];
+        foreach (['openai', 'anthropic', 'gemini', 'deepseek'] as $provider) {
+            $obsolete[] = 'aiapikey_' . $provider;
+            $obsolete[] = 'aimodel_' . $provider;
+            $obsolete[] = 'aimodelcustom_' . $provider;
+        }
+        foreach ($obsolete as $name) {
+            unset_config($name, 'mod_peerreviewstudio');
+        }
+
+        upgrade_mod_savepoint(true, 2026111305, 'peerreviewstudio');
     }
 
     return true;

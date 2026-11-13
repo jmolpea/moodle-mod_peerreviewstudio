@@ -44,6 +44,7 @@ class review_form extends \moodleform {
                 // (and may arrive via course restore), so escape them before
                 // they reach form elements that render raw HTML.
                 $mform->addElement('header', 'criterionhdr_' . $criterion['id'], s((string)$criterion['label']));
+                $mform->setExpanded('criterionhdr_' . $criterion['id']);
                 if (!empty($criterion['description'])) {
                     $mform->addElement('static', 'criteriondesc_' . $criterion['id'], '', s((string)$criterion['description']));
                 }
@@ -65,22 +66,15 @@ class review_form extends \moodleform {
             }
         }
 
+        $mform->addElement('header', 'generalcommenthdr', get_string('reviewoverallheading', 'mod_peerreviewstudio'));
+        $mform->setExpanded('generalcommenthdr');
         $mform->addElement('textarea', 'generalcomment', get_string('reviewgeneralcomment', 'mod_peerreviewstudio'), [
-            'rows' => 10,
+            'rows' => 8,
             'cols' => 80,
         ]);
         $mform->setType('generalcomment', PARAM_TEXT);
         $mform->addRule('generalcomment', null, 'required', null, 'client');
-
-        $mform->addElement(
-            'static',
-            'rubricgradeinfo',
-            get_string('reviewgrade', 'mod_peerreviewstudio'),
-            get_string('rubricgradecalculated', 'mod_peerreviewstudio')
-        );
-
-        $mform->addElement('hidden', 'id', $customdata['cmid']);
-        $mform->setType('id', PARAM_INT);
+        $mform->addHelpButton('generalcomment', 'reviewgeneralcomment', 'mod_peerreviewstudio');
 
         $mform->addElement('hidden', 'assignmentid', $customdata['assignmentid']);
         $mform->setType('assignmentid', PARAM_INT);
@@ -97,6 +91,10 @@ class review_form extends \moodleform {
      */
     public function validation($data, $files): array {
         $errors = parent::validation($data, $files);
+
+        if (trim((string)($data['generalcomment'] ?? '')) === '') {
+            $errors['generalcomment'] = get_string('required');
+        }
 
         foreach (($this->_customdata['rubric'] ?? []) as $criterion) {
             $field = 'criterion_' . $criterion['id'];

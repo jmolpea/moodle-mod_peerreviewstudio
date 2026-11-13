@@ -1,539 +1,367 @@
-.peerreviewstudio-shell {
+/* Peer Review Studio: activity page and tutor dashboard. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-shell {
     display: flex;
     flex-direction: column;
-    gap: 1.5rem;
+    gap: 1rem;
+    max-width: 1100px;
 }
 
-.peerreviewstudio-sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
+.path-mod-peerreviewstudio .peerreviewstudio-muted,
+.path-mod-peerreviewstudio .peerreviewstudio-email {
+    color: var(--bs-secondary-color, #5a6570);
 }
 
-.peerreviewstudio-hero,
-.peerreviewstudio-card {
-    background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
-    border: 1px solid #e2e8f0;
-    border-radius: 18px;
-    box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+.path-mod-peerreviewstudio .peerreviewstudio-email {
+    font-size: 0.85em;
 }
 
-.peerreviewstudio-hero {
-    padding: 1.75rem;
-    display: flex;
-    justify-content: space-between;
-    gap: 1.25rem;
-    align-items: flex-start;
-    background:
-        radial-gradient(1200px 300px at 110% -20%, rgba(129, 140, 248, 0.12), transparent 60%),
-        linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+/* Workflow summary. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-hero {
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.5rem;
+    padding: 1rem 1.25rem;
 }
 
-.peerreviewstudio-title {
-    margin: 0.5rem 0 0.25rem;
-    font-size: 1.6rem;
-    letter-spacing: -0.02em;
-}
-
-.peerreviewstudio-subtitle,
-.peerreviewstudio-muted,
-.peerreviewstudio-email {
-    color: #475569;
-}
-
-.peerreviewstudio-email {
-    font-size: 0.85rem;
-}
-
-.peerreviewstudio-hero-stats,
-.peerreviewstudio-metrics {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 0.75rem;
-}
-
-.peerreviewstudio-stat,
-.peerreviewstudio-metric {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 14px;
-    padding: 0.85rem 1rem;
-    transition: box-shadow 0.15s ease, transform 0.15s ease;
-}
-
-.peerreviewstudio-metric:hover {
-    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
-}
-
-.peerreviewstudio-metric strong {
-    display: block;
-    font-size: 1.45rem;
-    line-height: 1.2;
-    color: #0f172a;
-    font-variant-numeric: tabular-nums;
-}
-
-.peerreviewstudio-metric-body {
-    margin: 0;
-}
-
-.peerreviewstudio-metric span,
-.peerreviewstudio-stat-label {
-    font-size: 0.92rem;
-}
-
-.peerreviewstudio-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    background: #e0f2fe;
-    color: #075985;
-    border-radius: 999px;
-    padding: 0.3rem 0.7rem;
-    font-size: 0.85rem;
-    font-weight: 600;
-    white-space: nowrap;
-}
-
-.peerreviewstudio-chip-phase {
-    background: #ede9fe;
-    color: #5b21b6;
-}
-
-.peerreviewstudio-chip-alert {
-    background: #fef3c7;
-    color: #92400e;
-}
-
-.peerreviewstudio-chip-ai {
-    background: #f0f9ff;
-    color: #0c4a6e;
-    border: 1px solid #bae6fd;
-    margin-bottom: 0.6rem;
-}
-
-.peerreviewstudio-card-ai {
-    border-left: 4px solid #38bdf8;
-}
-
-.peerreviewstudio-queueform {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    flex-wrap: wrap;
-    margin: 0 0 1rem;
-}
-
-.peerreviewstudio-queueform-hint {
-    font-size: 0.85rem;
-}
-
-.peerreviewstudio-phasebar {
+.path-mod-peerreviewstudio .peerreviewstudio-phasebar {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5rem;
 }
 
-.peerreviewstudio-phasebar-item {
-    padding: 0.55rem 0.9rem;
+.path-mod-peerreviewstudio .peerreviewstudio-phasebar-item {
     border-radius: 999px;
-    background: #f1f5f9;
-    color: #334155;
-    font-size: 0.9rem;
-    transition: background 0.15s ease;
+    padding: 0.25rem 0.9rem;
+    background: #eef1f4;
+    color: #33404d;
+    font-size: 0.9em;
 }
 
-.peerreviewstudio-phasebar-item.is-active {
-    background: #0f172a;
+.path-mod-peerreviewstudio .peerreviewstudio-phasebar-item.is-active {
+    background: #1f2937;
     color: #fff;
-    box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
-}
-
-.peerreviewstudio-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 1fr);
-    gap: 1.5rem;
-    align-items: start;
-}
-
-.peerreviewstudio-main,
-.peerreviewstudio-sidebar {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
-    min-width: 0;
-}
-
-.peerreviewstudio-card {
-    padding: 1.4rem;
-}
-
-.peerreviewstudio-card-title {
-    margin-top: 0;
-    margin-bottom: 1rem;
-    font-size: 1.15rem;
-    letter-spacing: -0.01em;
-}
-
-.peerreviewstudio-kpi {
     font-weight: 600;
-    color: #0f172a;
 }
 
-.peerreviewstudio-notice {
-    padding: 0.85rem 1rem;
-    border-radius: 12px;
-    background: #fff7ed;
-    color: #9a3412;
-    border: 1px solid #fdba74;
+.path-mod-peerreviewstudio .peerreviewstudio-nextstep {
+    margin: 0.9rem 0 0;
+    font-size: 1.1em;
+    font-weight: 600;
 }
 
-.peerreviewstudio-notice-success {
-    background: #ecfdf5;
-    color: #166534;
-    border-color: #86efac;
-}
-
-/* Submitted-state success banner. */
-.peerreviewstudio-success-banner {
+.path-mod-peerreviewstudio .peerreviewstudio-hero-stats {
     display: flex;
-    align-items: center;
-    gap: 0.85rem;
-    padding: 0.95rem 1.1rem;
-    margin-bottom: 1rem;
-    border-radius: 14px;
-    background: #ecfdf5;
-    border: 1px solid #86efac;
+    flex-wrap: wrap;
+    gap: 0.5rem 1.5rem;
+    margin: 0.6rem 0 0;
+    padding: 0;
+    list-style: none;
 }
 
-.peerreviewstudio-success-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 2rem;
-    height: 2rem;
-    flex-shrink: 0;
+/* Cards. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-card {
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.5rem;
+    padding: 1.25rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-card-title {
+    margin: 0 0 0.75rem;
+    font-size: 1.2em;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-section-title {
+    margin: 1rem 0 0.5rem;
+    font-size: 1em;
+    font-weight: 600;
+}
+
+/* Chips. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-chip {
+    display: inline-block;
     border-radius: 999px;
-    background: #16a34a;
-    color: #fff;
-    font-weight: 700;
-    font-size: 1.05rem;
+    padding: 0.1rem 0.65rem;
+    background: #e7f1fb;
+    color: #0b4a7a;
+    font-size: 0.85em;
+    font-weight: 600;
+    white-space: nowrap;
 }
 
-.peerreviewstudio-success-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
+.path-mod-peerreviewstudio .peerreviewstudio-chip-phase {
+    background: #ede9fe;
+    color: #4c1d95;
 }
 
-.peerreviewstudio-success-body strong {
+.path-mod-peerreviewstudio .peerreviewstudio-chip-alert {
+    background: #fef3c7;
+    color: #7c2d12;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-chip-success {
+    background: #dcfce7;
     color: #14532d;
 }
 
-/* Collapsed edit form after a submission exists. */
-.peerreviewstudio-editwrap {
-    margin-top: 1rem;
-    border: 1px dashed #cbd5e1;
-    border-radius: 14px;
-    padding: 0;
-    background: #fff;
+.path-mod-peerreviewstudio .peerreviewstudio-chip-ai {
+    background: #e0f2fe;
+    color: #0c4a6e;
 }
 
-.peerreviewstudio-editwrap[open] {
-    border-style: solid;
-    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+/* Notices. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-notice {
+    border: 1px solid #fdba74;
+    border-radius: 0.375rem;
+    padding: 0.6rem 0.9rem;
+    background: #fff7ed;
+    color: #7c2d12;
 }
 
-.peerreviewstudio-editwrap > * {
-    margin-left: 1rem;
-    margin-right: 1rem;
+.path-mod-peerreviewstudio .peerreviewstudio-aipolicy {
+    margin-bottom: 1rem;
+    border: 1px solid #7dd3fc;
+    border-radius: 0.375rem;
+    padding: 0.75rem 1rem;
+    background: #f0f9ff;
+    color: #0c4a6e;
 }
 
-.peerreviewstudio-editwrap-summary {
-    cursor: pointer;
-    padding: 0.85rem 1rem;
-    margin: 0;
-    font-weight: 600;
-    color: #1d4ed8;
-    border-radius: 14px;
-    list-style-position: inside;
-    transition: background 0.15s ease;
-}
-
-.peerreviewstudio-editwrap-summary:hover {
-    background: #f1f5f9;
-}
-
-.peerreviewstudio-editwrap[open] .peerreviewstudio-editwrap-summary {
-    border-bottom: 1px solid #e2e8f0;
-    border-radius: 14px 14px 0 0;
-    margin-bottom: 0.85rem;
-}
-
-.peerreviewstudio-feedback {
-    border-top: 1px solid #e2e8f0;
-    padding-top: 1rem;
-    margin-top: 1rem;
-}
-
-.peerreviewstudio-feedback:first-of-type {
-    border-top: 0;
-    padding-top: 0;
-    margin-top: 0;
-}
-
-.peerreviewstudio-feedback-head {
-    display: flex;
-    justify-content: space-between;
-    gap: 1rem;
-    align-items: center;
+.path-mod-peerreviewstudio .peerreviewstudio-aipolicy details {
     margin-bottom: 0.75rem;
 }
 
-.peerreviewstudio-rubric-list {
-    list-style: none;
-    margin: 0 0 1rem;
-    padding: 0;
-    display: grid;
-    gap: 0.65rem;
-}
-
-.peerreviewstudio-rubric-item {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 0.85rem;
-}
-
-.peerreviewstudio-rubric-line {
+.path-mod-peerreviewstudio .peerreviewstudio-aipolicy summary {
+    cursor: pointer;
     font-weight: 600;
-    color: #0f172a;
 }
 
-.peerreviewstudio-rubric-comment,
-.peerreviewstudio-feedback-comment,
-.peerreviewstudio-submission-preview {
-    margin-top: 0.4rem;
-    color: #334155;
+.path-mod-peerreviewstudio .peerreviewstudio-aipolicy-text {
+    margin-top: 0.5rem;
 }
 
-.peerreviewstudio-submission-preview {
-    background: #fff;
-    border: 1px solid #e2e8f0;
-    border-radius: 12px;
-    padding: 0.85rem 1rem;
-}
-
-.peerreviewstudio-section-title {
-    margin: 1rem 0 0.6rem;
+.path-mod-peerreviewstudio .peerreviewstudio-aipolicy-text h4 {
     font-size: 1rem;
 }
 
-.peerreviewstudio-review-target {
-    margin: 1rem 0 1.25rem;
-    padding: 1rem;
-    border: 1px solid #dbeafe;
-    border-radius: 14px;
-    background: #f8fbff;
+.path-mod-peerreviewstudio .peerreviewstudio-notice-success {
+    border-color: #86efac;
+    background: #f0fdf4;
+    color: #14532d;
 }
 
-.peerreviewstudio-file-list {
-    margin: 0;
-    padding-left: 1.2rem;
-}
-
-.peerreviewstudio-file-item + .peerreviewstudio-file-item {
-    margin-top: 0.35rem;
-}
-
-.peerreviewstudio-file-item a {
-    color: #1d4ed8;
-    text-decoration: none;
-}
-
-.peerreviewstudio-file-item a:hover {
-    text-decoration: underline;
-}
-
-.peerreviewstudio-filters {
-    display: grid;
-    gap: 0.6rem;
-    margin: 1rem 0;
-}
-
-.peerreviewstudio-filters input[type="text"],
-.peerreviewstudio-filters select,
-.peerreviewstudio-table select {
-    width: 100%;
-    max-width: 100%;
-    padding: 0.55rem 0.7rem;
-    border-radius: 10px;
-    border: 1px solid #cbd5e1;
-    background: #fff;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-
-.peerreviewstudio-filters input[type="text"]:focus,
-.peerreviewstudio-filters select:focus,
-.peerreviewstudio-table select:focus,
-.peerreviewstudio-gradeform input[type="text"]:focus {
-    outline: none;
-    border-color: #6366f1;
-    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.18);
-}
-
-.peerreviewstudio-filters input[type="submit"],
-.peerreviewstudio-table input[type="submit"] {
-    border: 0;
-    border-radius: 10px;
-    background: #0f172a;
-    color: #fff;
-    padding: 0.6rem 0.9rem;
-    cursor: pointer;
-    font-weight: 600;
-    transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.peerreviewstudio-filters input[type="submit"]:hover,
-.peerreviewstudio-table input[type="submit"]:hover {
-    background: #1e293b;
-}
-
-.peerreviewstudio-filters input[type="submit"]:active,
-.peerreviewstudio-table input[type="submit"]:active {
-    transform: translateY(1px);
-}
-
-.peerreviewstudio-gradeform {
+.path-mod-peerreviewstudio .peerreviewstudio-success-banner {
     display: flex;
-    gap: 0.45rem;
     align-items: center;
-    flex-wrap: wrap;
-    margin-top: 0.75rem;
+    gap: 0.75rem;
+    border: 1px solid #86efac;
+    border-radius: 0.375rem;
+    padding: 0.6rem 0.9rem;
+    background: #f0fdf4;
+    color: #14532d;
 }
 
-.peerreviewstudio-gradeform-wrap {
-    margin-top: 0.75rem;
-}
-
-.peerreviewstudio-matching-meta {
-    font-weight: 600;
-    color: #0f172a;
-    margin-bottom: 0.25rem;
-}
-
-.peerreviewstudio-gradeform input[type="text"] {
-    min-width: 120px;
-    padding: 0.5rem 0.65rem;
-    border-radius: 10px;
-    border: 1px solid #cbd5e1;
-}
-
-/* Tables: horizontal scroll on narrow viewports instead of layout breakage. */
-.peerreviewstudio-table-wrap {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    border-radius: 12px;
-}
-
-.peerreviewstudio-table {
-    width: 100%;
-    min-width: 720px;
-    border-collapse: separate;
-    border-spacing: 0;
-}
-
-.peerreviewstudio-table caption {
-    caption-side: top;
-    text-align: left;
-    font-weight: 600;
-    color: #334155;
-    padding: 0 0 0.75rem;
-}
-
-.peerreviewstudio-table th {
-    background: #f8fafc;
-    position: sticky;
-    top: 0;
-    z-index: 1;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-    color: #475569;
-}
-
-.peerreviewstudio-table td,
-.peerreviewstudio-table th {
-    vertical-align: top;
-    padding: 0.65rem 0.75rem;
-    border-bottom: 1px solid #eef2f7;
-}
-
-.peerreviewstudio-table tbody tr:hover td {
-    background: #f8fafc;
-}
-
-/* Pagination. */
-.peerreviewstudio-pagination {
-    display: flex;
+.path-mod-peerreviewstudio .peerreviewstudio-success-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     justify-content: center;
-    gap: 1rem;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 50%;
+    background: #15803d;
+    color: #fff;
+    font-weight: 700;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-success-body {
+    display: flex;
+    flex-direction: column;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-success-body .peerreviewstudio-muted {
+    color: #166534;
+}
+
+/* Submission content. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-submission-preview {
+    margin-top: 0.75rem;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.375rem;
+    padding: 0.9rem 1rem;
+    overflow-wrap: anywhere;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-file-list {
+    margin: 0;
+    padding-left: 1.25rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-editwrap {
     margin-top: 1rem;
-    flex-wrap: wrap;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.375rem;
+    padding: 0 1rem;
 }
 
-.peerreviewstudio-pagelink {
-    padding: 0.5rem 0.9rem;
-    border-radius: 10px;
-    border: 1px solid #cbd5e1;
-    background: #fff;
-    color: #0f172a;
+.path-mod-peerreviewstudio .peerreviewstudio-editwrap[open] {
+    padding-bottom: 1rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-editwrap-summary {
+    padding: 0.6rem 0;
     font-weight: 600;
-    text-decoration: none;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    cursor: pointer;
 }
 
-.peerreviewstudio-pagelink:hover {
-    background: #f1f5f9;
-    border-color: #94a3b8;
-    text-decoration: none;
+/* Reviews. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-review-list {
+    margin: 0 0 0.5rem;
+    padding: 0;
+    list-style: none;
 }
 
-.peerreviewstudio-pageinfo {
-    color: #475569;
-    font-size: 0.92rem;
-    font-variant-numeric: tabular-nums;
+.path-mod-peerreviewstudio .peerreviewstudio-review-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0;
+    padding: 0.45rem 0;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
 }
 
-@media (max-width: 960px) {
-    .peerreviewstudio-grid {
+.path-mod-peerreviewstudio .peerreviewstudio-review-target {
+    margin: 1rem 0;
+    border-left: 4px solid #6d28d9;
+    padding-left: 1rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-feedback {
+    margin-top: 1rem;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.375rem;
+    padding: 0.9rem 1rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-feedback-ai {
+    border-color: #7dd3fc;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-feedback-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-rubric-list {
+    margin: 0.75rem 0 0;
+    padding: 0;
+    list-style: none;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-rubric-item {
+    padding: 0.4rem 0;
+    border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-rubric-line {
+    font-weight: 600;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-rubric-comment,
+.path-mod-peerreviewstudio .peerreviewstudio-feedback-comment {
+    margin-top: 0.35rem;
+    overflow-wrap: anywhere;
+}
+
+/* Grades. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-grades {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 0.25rem 1.5rem;
+    margin: 0 0 0.75rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-grades dt {
+    font-weight: 400;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-grades dd {
+    margin: 0;
+}
+
+/* Tutor dashboard. */
+
+.path-mod-peerreviewstudio .peerreviewstudio-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: 0.75rem;
+    margin: 0 0 1rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-metric {
+    display: flex;
+    flex-direction: column-reverse;
+    border: 1px solid rgba(0, 0, 0, 0.125);
+    border-radius: 0.375rem;
+    padding: 0.6rem 0.9rem;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-metric dt {
+    font-size: 0.85em;
+    font-weight: 400;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-metric dd {
+    margin: 0;
+    font-size: 1.6em;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-inline-form {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin: 0.75rem 0;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-inline-form label {
+    margin: 0;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-inline-form .form-control,
+.path-mod-peerreviewstudio .peerreviewstudio-inline-form .custom-select,
+.path-mod-peerreviewstudio .peerreviewstudio-inline-form .form-select {
+    width: auto;
+    max-width: 100%;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-table-wrap {
+    overflow-x: auto;
+}
+
+.path-mod-peerreviewstudio .peerreviewstudio-table {
+    margin-bottom: 0.5rem;
+}
+
+@media (max-width: 576px) {
+    .path-mod-peerreviewstudio .peerreviewstudio-card,
+    .path-mod-peerreviewstudio .peerreviewstudio-hero {
+        padding: 0.9rem;
+    }
+
+    .path-mod-peerreviewstudio .peerreviewstudio-grades {
         grid-template-columns: 1fr;
-    }
-
-    .peerreviewstudio-hero {
-        flex-direction: column;
-    }
-
-    .peerreviewstudio-feedback-head {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .peerreviewstudio-metric,
-    .peerreviewstudio-phasebar-item,
-    .peerreviewstudio-editwrap-summary,
-    .peerreviewstudio-pagelink,
-    .peerreviewstudio-filters input[type="submit"],
-    .peerreviewstudio-table input[type="submit"] {
-        transition: none;
     }
 }
