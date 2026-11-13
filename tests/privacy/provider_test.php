@@ -23,6 +23,7 @@ use core_privacy\local\request\userlist;
 use core_privacy\local\request\writer;
 use core_privacy\tests\provider_testcase;
 
+#[\PHPUnit\Framework\Attributes\CoversClass(provider::class)]
 /**
  * Unit tests for the privacy provider.
  *
@@ -31,7 +32,6 @@ use core_privacy\tests\provider_testcase;
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers      \mod_peerreviewstudio\privacy\provider
  */
-#[\PHPUnit\Framework\Attributes\CoversClass(provider::class)]
 final class provider_test extends provider_testcase {
     /** @var \stdClass Activity instance (with cmid). */
     protected \stdClass $instance;

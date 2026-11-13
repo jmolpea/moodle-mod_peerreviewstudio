@@ -18,6 +18,14 @@ namespace mod_peerreviewstudio;
 
 use mod_peerreviewstudio\completion\custom_completion;
 
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_add_instance')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_update_instance')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_delete_instance')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_reset_userdata')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_set_calendar_events')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('mod_peerreviewstudio_core_calendar_provide_event_action')]
+#[\PHPUnit\Framework\Attributes\CoversClass(custom_completion::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(dates::class)]
 /**
  * Unit tests for the module API callbacks in lib.php.
  *
@@ -33,14 +41,6 @@ use mod_peerreviewstudio\completion\custom_completion;
  * @covers      \mod_peerreviewstudio\completion\custom_completion
  * @covers      \mod_peerreviewstudio\dates
  */
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_add_instance')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_update_instance')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_delete_instance')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_reset_userdata')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_set_calendar_events')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('mod_peerreviewstudio_core_calendar_provide_event_action')]
-#[\PHPUnit\Framework\Attributes\CoversClass(custom_completion::class)]
-#[\PHPUnit\Framework\Attributes\CoversClass(dates::class)]
 final class lib_test extends \advanced_testcase {
     /** @var \mod_peerreviewstudio_generator Plugin generator. */
     protected \mod_peerreviewstudio_generator $plugingenerator;

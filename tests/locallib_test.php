@@ -18,6 +18,14 @@ namespace mod_peerreviewstudio;
 
 use mod_peerreviewstudio\local\service\dashboard_service;
 
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_current_phase')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_assignment_queue')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_reviewer_candidates')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_submission')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_review')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_refresh_submission_grade')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_review_followups')]
+#[\PHPUnit\Framework\Attributes\CoversClass(dashboard_service::class)]
 /**
  * Unit tests for the workflow, matching, grading, and follow-up logic.
  *
@@ -33,14 +41,6 @@ use mod_peerreviewstudio\local\service\dashboard_service;
  * @covers      ::peerreviewstudio_process_review_followups
  * @covers      \mod_peerreviewstudio\local\service\dashboard_service
  */
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_current_phase')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_assignment_queue')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_reviewer_candidates')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_submission')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_review')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_refresh_submission_grade')]
-#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_review_followups')]
-#[\PHPUnit\Framework\Attributes\CoversClass(dashboard_service::class)]
 final class locallib_test extends \advanced_testcase {
     /** @var \stdClass Course used by the test. */
     protected \stdClass $course;

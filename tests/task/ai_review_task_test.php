@@ -18,6 +18,8 @@ namespace mod_peerreviewstudio\task;
 
 use mod_peerreviewstudio\local\ai\client;
 
+#[\PHPUnit\Framework\Attributes\CoversClass(ai_review_task::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(ai_fallback_review_task::class)]
 /**
  * Unit tests for the AI review tasks.
  *
@@ -30,8 +32,6 @@ use mod_peerreviewstudio\local\ai\client;
  * @covers      \mod_peerreviewstudio\task\ai_review_task
  * @covers      \mod_peerreviewstudio\task\ai_fallback_review_task
  */
-#[\PHPUnit\Framework\Attributes\CoversClass(ai_review_task::class)]
-#[\PHPUnit\Framework\Attributes\CoversClass(ai_fallback_review_task::class)]
 final class ai_review_task_test extends \advanced_testcase {
     /** @var \stdClass Course used by the test. */
     protected \stdClass $course;

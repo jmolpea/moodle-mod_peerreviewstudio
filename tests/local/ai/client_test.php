@@ -19,6 +19,8 @@ namespace mod_peerreviewstudio\local\ai;
 use core_ai\aiactions\generate_text;
 use core_ai\aiactions\responses\response_generate_text;
 
+#[\PHPUnit\Framework\Attributes\CoversClass(client::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(submission_reader::class)]
 /**
  * Unit tests for the AI client and the submission reader.
  *
@@ -30,8 +32,6 @@ use core_ai\aiactions\responses\response_generate_text;
  * @covers      \mod_peerreviewstudio\local\ai\client
  * @covers      \mod_peerreviewstudio\local\ai\submission_reader
  */
-#[\PHPUnit\Framework\Attributes\CoversClass(client::class)]
-#[\PHPUnit\Framework\Attributes\CoversClass(submission_reader::class)]
 final class client_test extends \advanced_testcase {
     /**
      * Replace the core AI manager with one that answers with the given response.

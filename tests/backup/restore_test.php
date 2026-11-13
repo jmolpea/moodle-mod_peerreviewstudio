@@ -24,6 +24,9 @@ require_once($CFG->dirroot . '/backup/util/includes/restore_includes.php');
 require_once($CFG->dirroot . '/course/lib.php');
 require_once($CFG->dirroot . '/mod/peerreviewstudio/lib.php');
 
+#[\PHPUnit\Framework\Attributes\CoversClass(\backup_peerreviewstudio_activity_structure_step::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\restore_peerreviewstudio_activity_structure_step::class)]
+#[\PHPUnit\Framework\Attributes\CoversClass(\restore_peerreviewstudio_activity_task::class)]
 /**
  * Backup and restore round-trip tests.
  *
@@ -34,9 +37,6 @@ require_once($CFG->dirroot . '/mod/peerreviewstudio/lib.php');
  * @covers      \restore_peerreviewstudio_activity_structure_step
  * @covers      \restore_peerreviewstudio_activity_task
  */
-#[\PHPUnit\Framework\Attributes\CoversClass(\backup_peerreviewstudio_activity_structure_step::class)]
-#[\PHPUnit\Framework\Attributes\CoversClass(\restore_peerreviewstudio_activity_structure_step::class)]
-#[\PHPUnit\Framework\Attributes\CoversClass(\restore_peerreviewstudio_activity_task::class)]
 final class restore_test extends \advanced_testcase {
     /**
      * Back up a course with user data and logs, and restore it as a new course.

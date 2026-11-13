@@ -1,6 +1,12 @@
 name: Moodle Plugin CI
 
-on: [push, pull_request]
+# Pushes to main and tags, and every pull request (a branch with a pull request
+# is tested once, not twice).
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
 
 jobs:
   test:
@@ -8,7 +14,8 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        # Moodle 5.3 needs PostgreSQL 17; earlier versions run on it too.
+        image: postgres:17
         env:
           POSTGRES_USER: 'postgres'
           POSTGRES_HOST_AUTH_METHOD: 'trust'
@@ -17,7 +24,8 @@ jobs:
         options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 3
 
       mariadb:
-        image: mariadb:10.11
+        # Moodle 5.3 needs MariaDB 11.4; earlier versions are tested on 10.11.
+        image: mariadb:${{ matrix.mariadb }}
         env:
           MYSQL_USER: 'root'
           MYSQL_ALLOW_EMPTY_PASSWORD: "true"
@@ -25,7 +33,7 @@ jobs:
           MYSQL_COLLATION_SERVER: "utf8mb4_unicode_ci"
         ports:
           - 3306:3306
-        options: --health-cmd="mysqladmin ping" --health-interval 10s --health-timeout 5s --health-retries 3
+        options: --health-cmd="mariadb-admin ping" --health-interval 10s --health-timeout 5s --health-retries 3
 
     strategy:
       fail-fast: false
@@ -34,33 +42,43 @@ jobs:
           - php: '8.1'
             moodle-branch: 'MOODLE_405_STABLE'
             database: pgsql
+            mariadb: '10.11'
           - php: '8.3'
             moodle-branch: 'MOODLE_405_STABLE'
             database: mariadb
+            mariadb: '10.11'
           - php: '8.2'
             moodle-branch: 'MOODLE_500_STABLE'
             database: mariadb
+            mariadb: '10.11'
           - php: '8.4'
             moodle-branch: 'MOODLE_500_STABLE'
             database: pgsql
+            mariadb: '10.11'
           - php: '8.2'
             moodle-branch: 'MOODLE_501_STABLE'
             database: pgsql
+            mariadb: '10.11'
           - php: '8.4'
             moodle-branch: 'MOODLE_501_STABLE'
             database: mariadb
+            mariadb: '10.11'
           - php: '8.3'
             moodle-branch: 'MOODLE_502_STABLE'
             database: mariadb
+            mariadb: '10.11'
           - php: '8.4'
             moodle-branch: 'MOODLE_502_STABLE'
             database: pgsql
+            mariadb: '10.11'
           - php: '8.3'
             moodle-branch: 'MOODLE_503_STABLE'
             database: pgsql
+            mariadb: '11.4'
           - php: '8.4'
             moodle-branch: 'MOODLE_503_STABLE'
             database: mariadb
+            mariadb: '11.4'
 
     steps:
       - name: Check out repository code
