@@ -15,12 +15,12 @@ organizado según lo que esa documentación dice que se pide.
 
 Estos puntos bloquean la aprobación o el envío si no se cumplen.
 
-1. **El repositorio de GitHub tiene que ser público.** Hoy es privado. Las
-   pautas exigen un gestor de incidencias público y accesible; sin él el plugin
-   no se aprueba. Con el repositorio privado, sus incidencias no son públicas.
-2. **Subir el código a GitHub** (commit y push de `main`) y comprobar que el
-   flujo "Moodle Plugin CI" termina en verde. Marketplace usa la misma
-   herramienta (moodle-plugin-ci) en sus comprobaciones automáticas.
+1. **Repositorio público**: hecho el 13/11/2026. Las pautas exigen un gestor
+   de incidencias público y accesible; el de GitHub ya lo es.
+2. **Código en GitHub y CI en verde**: hecho. El flujo "Moodle Plugin CI"
+   pasa en las diez combinaciones (Moodle 4.5 a 5.3, PostgreSQL y MariaDB).
+   Marketplace usa la misma herramienta (moodle-plugin-ci) en sus
+   comprobaciones automáticas.
 3. **Crear la cuenta de Moodle Marketplace** en <https://marketplace.moodle.com>.
    No sirve la cuenta de moodle.org; hay que registrarse con el mismo correo
    para que se enlacen. Quien envía el plugin queda como mantenedor principal y
@@ -147,7 +147,7 @@ peer review, peer assessment, rubric, feedback, formative assessment, self-paced
 | Instalación desde ZIP sin pasos extra ni Composer | Cumple |
 | Sin avisos de PHP con depuración de desarrollador | Cumple (probado en navegador en 5.3) |
 | MySQL/MariaDB y PostgreSQL | Cumple (tests en ambos) |
-| Estilo de código, PHPDoc, CSS (moodle-plugin-ci) | 0 errores y 0 avisos en local |
+| Estilo de código, PHPDoc, CSS (moodle-plugin-ci) | 0 errores y 0 avisos, en local y en GitHub Actions |
 | Cabecera GPL y `@copyright` en todos los ficheros | Cumple |
 | CSS con selectores acotados al plugin | Cumple (`.path-mod-peerreviewstudio ...`) |
 | Nombres con prefijo del componente | Cumple |
@@ -157,7 +157,7 @@ peer review, peer assessment, rubric, feedback, formative assessment, self-paced
 | `sesskey`, `require_login`, capacidades, SQL con parámetros | Cumple |
 | Copia de seguridad y restauración (obligatorio en actividades) | Cumple |
 | Fichero de licencia en el paquete | Cumple (`LICENSE`) |
-| Gestor de incidencias público | **Pendiente: el repositorio es privado** |
+| Gestor de incidencias público | Cumple (incidencias de GitHub, repositorio público) |
 | Sin pagos ni publicidad fuera de Marketplace | Cumple |
 
 ## 11. Después de la aprobación
