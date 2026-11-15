@@ -46,6 +46,7 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
         $mform = $this->_form;
 
         $mform->addElement('header', 'generalhdr', get_string('general', 'form'));
+        $mform->addElement('static', 'manuallink', '', \mod_peerreviewstudio\local\manual::link());
         $mform->addElement('text', 'name', get_string('peerreviewstudioname', 'mod_peerreviewstudio'), ['size' => '64']);
         $mform->setType('name', PARAM_TEXT);
         $mform->addRule('name', null, 'required', null, 'client');
@@ -465,14 +466,40 @@ class mod_peerreviewstudio_mod_form extends moodleform_mod {
     protected function validate_rubric(array $data): array {
         $errors = [];
 
+        // A criterion with a label and no level at all is not part of the
+        // extracted definition, so it is reported here instead of being
+        // dropped without a word.
+        for ($criterionslot = 1; $criterionslot <= 5; $criterionslot++) {
+            if (trim((string)($data['rubriccriterionlabel_' . $criterionslot] ?? '')) === '') {
+                continue;
+            }
+            $haslevel = false;
+            for ($levelslot = 1; $levelslot <= 4; $levelslot++) {
+                if (trim((string)($data['rubriclevellabel_' . $criterionslot . '_' . $levelslot] ?? '')) !== '') {
+                    $haslevel = true;
+                }
+            }
+            if (!$haslevel) {
+                $errors['rubriccriterionlabel_' . $criterionslot] = get_string('rubriccriterionminlevels', 'mod_peerreviewstudio');
+            }
+        }
+
         $rubricdefinition = peerreviewstudio_extract_rubric_definition_from_form($data);
         if (!$rubricdefinition) {
-            $errors['rubriccriterionlabel_1'] = get_string('rubricmusthavecriterion', 'mod_peerreviewstudio');
+            if (!$errors) {
+                $errors['rubriccriterionlabel_1'] = get_string('rubricmusthavecriterion', 'mod_peerreviewstudio');
+            }
             return $errors;
         }
 
         foreach ($rubricdefinition as $criterion) {
             $field = 'rubriccriterionlabel_' . $criterion['slot'];
+            // The weight is stored with a minimum of 0.1: a smaller value is
+            // rejected rather than raised without telling the teacher.
+            $weightfield = 'rubriccriterionweight_' . $criterion['slot'];
+            if (isset($data[$weightfield]) && (float)$data[$weightfield] < 0.1) {
+                $errors[$weightfield] = get_string('rubriccriterionweightmin', 'mod_peerreviewstudio');
+            }
             if (count($criterion['levels']) < 2) {
                 $errors[$field] = get_string('rubriccriterionminlevels', 'mod_peerreviewstudio');
                 continue;

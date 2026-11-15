@@ -538,5 +538,26 @@ function xmldb_peerreviewstudio_upgrade(int $oldversion): bool {
         upgrade_mod_savepoint(true, 2026111305, 'peerreviewstudio');
     }
 
+    if ($oldversion < 2026111500) {
+        // The column defaults now match the defaults of the activity form
+        // (2 reviews per learner and per submission, reciprocal reviews
+        // allowed). Only the defaults change: stored activities keep their
+        // values.
+        $table = new xmldb_table('peerreviewstudio');
+        $defaults = [
+            'reviewcountrequired' => ['4', '2', 'submissiontype'],
+            'reviewsreceivedtarget' => ['4', '2', 'reviewcountrequired'],
+            'avoidreciprocalreviews' => ['1', '0', 'reviewpoolmode'],
+        ];
+        foreach ($defaults as $name => [$length, $default, $previous]) {
+            $field = new xmldb_field($name, XMLDB_TYPE_INTEGER, $length, null, XMLDB_NOTNULL, null, $default, $previous);
+            if ($dbman->field_exists($table, $field)) {
+                $dbman->change_field_default($table, $field);
+            }
+        }
+
+        upgrade_mod_savepoint(true, 2026111500, 'peerreviewstudio');
+    }
+
     return true;
 }

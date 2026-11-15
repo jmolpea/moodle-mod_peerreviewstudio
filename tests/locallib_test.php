@@ -20,6 +20,8 @@ use mod_peerreviewstudio\local\service\dashboard_service;
 
 #[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_current_phase')]
 #[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_process_assignment_queue')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_match_queue_evenly')]
+#[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_tutor_incident_rows')]
 #[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_get_reviewer_candidates')]
 #[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_submission')]
 #[\PHPUnit\Framework\Attributes\CoversFunction('peerreviewstudio_save_review')]
@@ -34,6 +36,8 @@ use mod_peerreviewstudio\local\service\dashboard_service;
  * @license     http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  * @covers      ::peerreviewstudio_get_current_phase
  * @covers      ::peerreviewstudio_process_assignment_queue
+ * @covers      ::peerreviewstudio_match_queue_evenly
+ * @covers      ::peerreviewstudio_get_tutor_incident_rows
  * @covers      ::peerreviewstudio_get_reviewer_candidates
  * @covers      ::peerreviewstudio_save_submission
  * @covers      ::peerreviewstudio_save_review
@@ -762,6 +766,120 @@ final class locallib_test extends \advanced_testcase {
         peerreviewstudio_update_instance($data);
         peerreviewstudio_notify_pending_reviewers($this->plugingenerator->get_activity($instance));
         $this->assertSame(['reviewassigned'], $this->notifications_for($b->id));
+    }
+
+    public function test_a_whole_queue_is_matched_evenly(): void {
+        global $DB;
+
+        $activity = $this->create_activity([
+            'workflowmode' => 'manual',
+            'manualphase' => 'submission',
+            'reviewsreceivedtarget' => 2,
+            'reviewcountrequired' => 2,
+        ]);
+        $students = $this->create_students(5);
+        $submissions = [];
+        foreach ($students as $student) {
+            $submissions[(int)$student->id] = $this->plugingenerator->create_submission($activity, $student->id);
+        }
+        $this->assertSame(0, $DB->count_records('peerreviewstudio_assignments'));
+
+        // Allocation phase: the five queued submissions are matched together.
+        $DB->set_field('peerreviewstudio', 'manualphase', 'allocation', ['id' => $activity->id]);
+        $activity = $this->plugingenerator->get_activity($activity);
+        $this->assertSame(10, peerreviewstudio_process_assignment_queue($activity));
+
+        foreach ($students as $student) {
+            $submission = $submissions[(int)$student->id];
+            $reviewers = array_map('intval', $DB->get_fieldset_select(
+                'peerreviewstudio_assignments',
+                'reviewerid',
+                'submissionid = :submissionid',
+                ['submissionid' => $submission->id]
+            ));
+            // Every submission gets two different reviewers, never its author.
+            $this->assertCount(2, $reviewers);
+            $this->assertCount(2, array_unique($reviewers));
+            $this->assertNotContains((int)$student->id, $reviewers);
+            $this->assertSame('assigned', $this->reload($submission)->status);
+            // Every learner has exactly the two reviews they are required to do.
+            $this->assertSame(2, $DB->count_records('peerreviewstudio_assignments', ['reviewerid' => $student->id]));
+        }
+        $this->assertSame(0, $DB->count_records('peerreviewstudio_queue', ['status' => 'pending']));
+
+        // Matches that already exist are never touched by a later run.
+        $this->assertSame(0, peerreviewstudio_process_assignment_queue($activity));
+        $this->assertSame(10, $DB->count_records('peerreviewstudio_assignments', ['status' => 'assigned']));
+    }
+
+    public function test_manual_mode_inactivity_clock_starts_when_reviewing_opens(): void {
+        global $DB;
+
+        $activity = $this->create_activity([
+            'workflowmode' => 'manual',
+            'manualphase' => 'allocation',
+            'reviewreminderdays' => 2,
+            'reviewreassigndays' => 4,
+        ]);
+        [$a, $b] = $this->create_students(2);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $assignment = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id);
+        $this->assertSame(0, (int)$assignment->timenotified);
+
+        // The allocation phase lasted longer than both thresholds.
+        $DB->set_field('peerreviewstudio_assignments', 'timeassigned', time() - 5 * DAYSECS, []);
+        $DB->set_field('peerreviewstudio', 'manualphase', 'review', ['id' => $activity->id]);
+        $activity = $this->plugingenerator->get_activity($activity);
+        $this->sink->clear();
+        peerreviewstudio_process_review_followups($activity);
+
+        // Reviewers are told they can start; nobody is reminded or replaced yet.
+        $this->assertSame(['reviewassigned'], $this->notifications_for($b->id));
+        $this->assertSame('assigned', $DB->get_field('peerreviewstudio_assignments', 'status', ['id' => $assignment->id]));
+
+        // Three days after the reviewer was told: one reminder.
+        $DB->set_field('peerreviewstudio_assignments', 'timenotified', time() - 3 * DAYSECS, ['id' => $assignment->id]);
+        $this->sink->clear();
+        peerreviewstudio_process_review_followups($activity);
+        $this->assertSame(['reviewreminder'], $this->notifications_for($b->id));
+
+        // Five days: the review is withdrawn.
+        $DB->set_field('peerreviewstudio_assignments', 'timenotified', time() - 5 * DAYSECS, ['id' => $assignment->id]);
+        $this->sink->clear();
+        peerreviewstudio_process_review_followups($activity);
+        $this->assertSame('cancelled', $DB->get_field('peerreviewstudio_assignments', 'status', ['id' => $assignment->id]));
+        $this->assertContains('reviewwithdrawn', $this->notifications_for($b->id));
+    }
+
+    public function test_partially_reviewed_submission_with_nobody_pending_needs_attention(): void {
+        global $DB;
+
+        $activity = $this->create_activity(['reviewsreceivedtarget' => 2, 'reviewcountrequired' => 2]);
+        [$a, $b, $c] = $this->create_students(3);
+        $suba = $this->plugingenerator->create_submission($activity, $a->id);
+        $this->plugingenerator->create_submission($activity, $b->id);
+        $this->plugingenerator->create_submission($activity, $c->id);
+
+        // B reviews A. While C still has the other review open, nothing is wrong.
+        $this->plugingenerator->create_review(
+            $activity,
+            $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$b->id),
+            2
+        );
+        $this->assertSame('partiallyreviewed', $this->reload($suba)->status);
+        $this->assertSame([], peerreviewstudio_get_tutor_incident_rows($activity));
+
+        // C's review is withdrawn and nothing is queued: a tutor has to see it.
+        $open = $this->plugingenerator->get_open_assignment((int)$suba->id, (int)$c->id);
+        $DB->set_field('peerreviewstudio_assignments', 'status', 'cancelled', ['id' => $open->id]);
+        peerreviewstudio_update_submission_status($activity, (int)$suba->id);
+        $this->assertSame('partiallyreviewed', $this->reload($suba)->status);
+
+        $incidents = peerreviewstudio_get_tutor_incident_rows($activity);
+        $this->assertCount(1, $incidents);
+        $this->assertSame((int)$suba->id, (int)reset($incidents)->id);
+        $this->assertSame('partial', reset($incidents)->incidenttype);
     }
 
     public function test_dashboard_reports_progress_and_respects_separate_groups(): void {

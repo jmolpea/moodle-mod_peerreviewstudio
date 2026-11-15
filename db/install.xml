@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" ?>
-<XMLDB PATH="mod/peerreviewstudio/db" VERSION="2026111305" COMMENT="XMLDB file for mod_peerreviewstudio"
+<XMLDB PATH="mod/peerreviewstudio/db" VERSION="2026111500" COMMENT="XMLDB file for mod_peerreviewstudio"
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
     xsi:noNamespaceSchemaLocation="../../../lib/xmldb/xmldb.xsd"
 >
@@ -12,11 +12,11 @@
         <FIELD NAME="intro" TYPE="text" NOTNULL="false"/>
         <FIELD NAME="introformat" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="submissiontype" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="file"/>
-        <FIELD NAME="reviewcountrequired" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="1"/>
-        <FIELD NAME="reviewsreceivedtarget" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="reviewcountrequired" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="2"/>
+        <FIELD NAME="reviewsreceivedtarget" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="2"/>
         <FIELD NAME="autoassignenabled" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"/>
         <FIELD NAME="reviewpoolmode" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="any"/>
-        <FIELD NAME="avoidreciprocalreviews" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1"/>
+        <FIELD NAME="avoidreciprocalreviews" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0"/>
         <FIELD NAME="reviewreminderdays" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="2"/>
         <FIELD NAME="reviewreassigndays" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="4"/>
         <FIELD NAME="grademaxsubmission" TYPE="number" LENGTH="10" DECIMALS="5" NOTNULL="true" DEFAULT="100"/>

@@ -1757,6 +1757,109 @@ function peerreviewstudio_notify_pending_reviewers(stdClass $activity): void {
 }
 
 /**
+ * Match every queued submission together, spreading the reviews evenly.
+ *
+ * Only used when the activity has no group pool and no reciprocal rule, and
+ * always under the matching lock. Each submission gets reviewers from the
+ * same eligible candidates as before (least loaded first) and exactly as
+ * many as before. The difference is the order: the queue is served one
+ * reviewer per submission at a time, and among equally loaded candidates the
+ * ones who submitted after the author go first. Matching one submission
+ * after the other left the last learners in the queue with fewer reviews to
+ * do than the first ones.
+ *
+ * @param stdClass $activity Activity record.
+ * @param stdClass[] $queueentries Pending queue entries, oldest first.
+ * @return int Number of assignments created.
+ */
+function peerreviewstudio_match_queue_evenly(stdClass $activity, array $queueentries): int {
+    global $DB;
+
+    // Read the whole queue first: nothing is assigned until every submission
+    // and its eligible reviewers are known.
+    $work = [];
+    $load = [];
+    foreach ($queueentries as $queueentry) {
+        $submissionid = (int)$queueentry->submissionid;
+        if (isset($work[$submissionid])) {
+            $work[$submissionid]->queueentries[] = $queueentry;
+            continue;
+        }
+        $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $submissionid]);
+        if (!$submission || (int)$submission->userid <= 0) {
+            peerreviewstudio_close_queue_entries($submissionid, 'failed');
+            continue;
+        }
+
+        $needed = peerreviewstudio_needed_assignments($activity, $submissionid);
+        $candidates = [];
+        if ($needed > 0) {
+            foreach (peerreviewstudio_get_eligible_reviewers_for_submission($activity, $submission) as $candidate) {
+                $candidates[(int)$candidate->userid] = $candidate;
+                $load[(int)$candidate->userid] = (int)$candidate->reviewload;
+            }
+        }
+        $work[$submissionid] = (object) [
+            'queueentries' => [$queueentry],
+            'submission' => $submission,
+            'needed' => $needed,
+            'candidates' => $candidates,
+        ];
+    }
+
+    $created = 0;
+    do {
+        $progress = false;
+        foreach ($work as $item) {
+            if ($item->needed <= 0 || !$item->candidates) {
+                continue;
+            }
+
+            $reviewerid = 0;
+            $best = null;
+            $authorkey = [(int)$item->submission->timesubmitted, (int)$item->submission->id];
+            foreach ($item->candidates as $userid => $candidate) {
+                $candidatekey = [(int)$candidate->timesubmitted, (int)$candidate->id];
+                $rank = [
+                    $load[$userid],
+                    (int)$candidate->cancelledload,
+                    $candidatekey < $authorkey ? 1 : 0,
+                    $candidatekey[0],
+                    $candidatekey[1],
+                ];
+                if ($best === null || $rank < $best) {
+                    $best = $rank;
+                    $reviewerid = $userid;
+                }
+            }
+
+            unset($item->candidates[$reviewerid]);
+            peerreviewstudio_create_assignment($activity, $item->submission, $reviewerid);
+            $load[$reviewerid]++;
+            $item->needed--;
+            $created++;
+            $progress = true;
+        }
+    } while ($progress);
+
+    $now = time();
+    foreach ($work as $item) {
+        foreach ($item->queueentries as $queueentry) {
+            $DB->update_record('peerreviewstudio_queue', (object) [
+                'id' => $queueentry->id,
+                'attempts' => (int)$queueentry->attempts + 1,
+                'lastattemptat' => $now,
+                'timemodified' => $now,
+                'status' => $item->needed <= 0 ? 'resolved' : 'pending',
+            ]);
+        }
+        peerreviewstudio_update_submission_status($activity, (int)$item->submission->id);
+    }
+
+    return $created;
+}
+
+/**
  * Process pending queue entries and create assignments up to the
  * configured reviews-received target for each queued submission.
  *
@@ -1783,6 +1886,14 @@ function peerreviewstudio_process_assignment_queue(stdClass $activity): int {
             'peerreviewstudioid' => $activity->id,
             'status' => 'pending',
         ], 'timecreated ASC, id ASC');
+
+        // Without group or reciprocal rules the reviewers a submission may
+        // get do not depend on the other matches of this run, so the whole
+        // queue is matched together and the reviewing load is spread evenly.
+        if ((string)($activity->reviewpoolmode ?? 'any') === 'any' && empty($activity->avoidreciprocalreviews)) {
+            $created = peerreviewstudio_match_queue_evenly($activity, $queueentries);
+            $queueentries = [];
+        }
 
         foreach ($queueentries as $queueentry) {
             $submission = $DB->get_record('peerreviewstudio_submissions', ['id' => $queueentry->submissionid]);
@@ -1926,8 +2037,10 @@ function peerreviewstudio_requeue_submission(stdClass $activity, int $submission
         peerreviewstudio_cancel_assignment($activity, $assignment);
     }
 
-    // A manual requeue is a fresh start: allow the automatic follow-up
-    // cycle (reassignment, fallback, escalation) to run again.
+    // A manual requeue lets the automatic follow-up cycle (reassignment,
+    // fallback, escalation) run again. The withdrawals already counted for
+    // the submission are kept, so the automatic reassignment cap still
+    // takes the earlier ones into account.
     $DB->update_record('peerreviewstudio_submissions', (object) [
         'id' => $submissionid,
         'timeescalated' => 0,
@@ -2177,8 +2290,9 @@ function peerreviewstudio_notify_tutors_of_unresolved(stdClass $activity, array 
  * inactive reviewers, withdraw and reassign stale assignments, and
  * escalate (AI fallback review or tutor digest) the submissions nothing
  * else could resolve. The inactivity clocks only run while reviewing is
- * actually possible, and in scheduled mode they start when the review
- * phase opens (timeclose), not at assignment time.
+ * actually possible. In scheduled mode they start when the review phase
+ * opens (timeclose), and in manual mode when the reviewer was told the work
+ * can be reviewed, not at assignment time.
  *
  * @param stdClass $activity Activity record.
  * @return void
@@ -2213,8 +2327,13 @@ function peerreviewstudio_process_review_followups(stdClass $activity): void {
         }
 
         $clockstart = (int)$assignment->timeassigned;
-        if ((string)($activity->workflowmode ?? 'scheduled') === 'scheduled') {
+        $mode = (string)($activity->workflowmode ?? 'scheduled');
+        if ($mode === 'scheduled') {
             $clockstart = max($clockstart, (int)($activity->timeclose ?? 0));
+        } else if ($mode === 'manual') {
+            // Reviewers matched during the allocation phase could not start
+            // yet: their clock runs from the moment they were told they can.
+            $clockstart = max($clockstart, (int)$assignment->timenotified);
         }
 
         if ($reassigndays > 0 && ($now - $clockstart) >= $reassigndays * DAYSECS) {
@@ -2780,6 +2899,8 @@ function peerreviewstudio_get_tutor_submission_rows(
  * - escalated: the automatic cycle gave up and a tutor must act;
  * - noreviewers: waiting for a reviewer and nobody is eligible;
  * - stuckqueue: waiting for a reviewer although candidates exist;
+ * - partial: reviewed by some peers, short of the target, and nobody else
+ *   is matched or queued (for example after the reassignment cap);
  * - unassigned: automatic matching is off and nobody was assigned.
  *
  * While matching has not started yet (for example during the scheduled
@@ -2806,6 +2927,11 @@ function peerreviewstudio_get_tutor_incident_rows(stdClass $activity, ?int $grou
         if (empty($activity->autoassignenabled)) {
             $conditions[] = "s.status = 'submitted'";
         }
+        $conditions[] = "(s.status = 'partiallyreviewed'
+                          AND NOT EXISTS (SELECT 1
+                                            FROM {peerreviewstudio_assignments} ap
+                                           WHERE ap.submissionid = s.id
+                                             AND ap.status = 'assigned'))";
     }
 
     $candidateids = $DB->get_fieldset_sql(
@@ -2838,6 +2964,8 @@ function peerreviewstudio_get_tutor_incident_rows(stdClass $activity, ?int $grou
             $row->incidenttype = 'escalated';
         } else if ((int)$row->pendingqueuecount > 0) {
             $row->incidenttype = $row->eligiblecount ? 'stuckqueue' : 'noreviewers';
+        } else if ((string)$row->status === 'partiallyreviewed') {
+            $row->incidenttype = 'partial';
         } else {
             $row->incidenttype = 'unassigned';
         }

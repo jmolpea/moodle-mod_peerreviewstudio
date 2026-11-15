@@ -1,5 +1,47 @@
 # Changelog
 
+## 1.0.1 (2026-11-15)
+
+Corrections found while writing the configuration manual. No setting was
+renamed or removed, and stored activities keep their values.
+
+### Fixed
+- **Manual mode reminded and replaced reviewers too early.** The inactivity
+  clock counted from the moment a reviewer was matched, including the days
+  the activity spent in the *Allocation* phase, so reviewers could be
+  reminded, or have their review withdrawn, as soon as the *Review* phase
+  opened. The clock now starts when the reviewer is told the work can be
+  reviewed.
+- **Uneven reviewing load when a whole queue was matched at once** (for
+  example when submissions close in scheduled mode). Submissions were matched
+  one after the other, so the last learners in the queue could end up with
+  fewer reviews to do than required while others got more. When the activity
+  has no group pool and no reciprocal rule (the defaults), the queue is now
+  matched together: every submission still gets the same number of reviewers,
+  chosen among the same eligible learners, and the load is spread evenly.
+  Existing matches are never changed, and activities that use a group pool or
+  avoid reciprocal reviews are matched exactly as before.
+- **A partially reviewed submission could be left waiting unnoticed.** A
+  submission that received some reviews but not its target, and that had no
+  reviewer matched or queued any more (for example after the automatic
+  reassignments ran out), did not appear anywhere; in open mode its author
+  kept waiting for feedback. It is now listed under "Needs attention" on the
+  tutor dashboard as "Partially reviewed; no reviewer pending".
+- **The rubric form changed values without saying so.** A criterion weight
+  below 0.1 was stored as 0.1, and a criterion with a label but no levels was
+  dropped. Both are now reported as errors in the form.
+- The default values of the database columns now match the activity form
+  (2 reviews per learner and per submission, reciprocal reviews allowed).
+  Only activities created outside the form were affected.
+
+### Added
+- A link to the online configuration manual, at the top of the plugin
+  settings page and of the activity form.
+
+### Changed
+- The help of the reminder and reassignment settings says that in manual
+  mode, as in scheduled mode, the clock starts when the review phase opens.
+
 ## 1.0.0 (2026-11-12)
 
 Full audit before the public release: architecture, database, security,

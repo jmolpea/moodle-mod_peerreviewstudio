@@ -36,6 +36,12 @@ if ($ADMIN->fulltree) {
     ];
 
     $settings->add(new admin_setting_heading(
+        'mod_peerreviewstudio/manualheading',
+        get_string('manuallink', 'mod_peerreviewstudio'),
+        \mod_peerreviewstudio\local\manual::link()
+    ));
+
+    $settings->add(new admin_setting_heading(
         'mod_peerreviewstudio/aiheading',
         get_string('setting_aiheading', 'mod_peerreviewstudio'),
         get_string('setting_aiheading_desc', 'mod_peerreviewstudio', $links)

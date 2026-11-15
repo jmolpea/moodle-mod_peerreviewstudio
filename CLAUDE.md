@@ -35,6 +35,13 @@ receive anonymous feedback and a grade. It supports Moodle 4.5 to 5.3.
   grade (null), not 0.
 - Reviewers are only matched while `peerreviewstudio_matching_allowed`, and
   matching runs under a lock (`peerreviewstudio_process_assignment_queue`).
+  A whole queue is matched evenly (`peerreviewstudio_match_queue_evenly`)
+  only when the activity has no group pool and no reciprocal rule, because
+  only then the reviewers a submission may get do not depend on the other
+  matches of the run; otherwise submissions are matched one by one.
+- The address of the configuration manual lives only in
+  `classes/local/manual.php`. The manual and the client diagnosis skill are
+  kept outside this repository and are updated with every release.
 - Module capabilities must not use `clonepermissionsfrom` (it overrides the
   archetypes); only `addinstance` does.
 - Every schema change needs an upgrade step, and the upgraded schema must be
