@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.0.2 (2026-11-17)
+
+### Added
+- **Course activity overview (Moodle 5.0 and later).** The course page
+  *Activities* overview now shows Peer Review Studio activities instead of
+  "information not available". Everybody sees the current phase and, in
+  scheduled mode, the deadline of that phase. Tutors also see how many
+  learners submitted, how many assigned reviews were completed, and a
+  *View* button with a badge counting submissions that need attention
+  (escalated and not resolved). Learners see the status of their own
+  submission and how many of their required reviews they completed. In
+  separate groups mode a tutor without access to all groups only counts
+  their own groups. Nothing changes on Moodle 4.5.
+
 ## 1.0.1 (2026-11-15)
 
 Corrections found while writing the configuration manual. No setting was
