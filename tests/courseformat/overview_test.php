@@ -58,12 +58,7 @@ final class overview_test extends \advanced_testcase {
         $a = $generator->create_and_enrol($course, 'student');
         $b = $generator->create_and_enrol($course, 'student');
         $generator->create_and_enrol($course, 'student');
-        $instance = $plugingenerator->create_instance([
-            'course' => $course->id,
-            'workflowmode' => 'scheduled',
-            'timeclose' => time() + DAYSECS,
-            'timereviewdue' => time() + 2 * DAYSECS,
-        ]);
+        $instance = $plugingenerator->create_instance(['course' => $course->id]);
         $suba = $plugingenerator->create_submission($instance, $a->id);
         $plugingenerator->create_submission($instance, $b->id);
         $plugingenerator->create_review(
@@ -75,12 +70,12 @@ final class overview_test extends \advanced_testcase {
         $this->setUser($teacher);
         $overview = $this->get_overview($course, (int)$instance->cmid);
         $items = $overview->get_extra_overview_items();
-        $this->assertSame('submission', $items['phase']->get_value());
+        $this->assertSame('ongoing', $items['phase']->get_value());
         $this->assertSame(2, $items['submissions']->get_value());
         $this->assertSame(1, $items['reviews']->get_value());
         $this->assertNull($items['mysubmission']);
         $this->assertNull($items['myreviews']);
-        $this->assertSame((int)$instance->timeclose, $overview->get_due_date_overview()->get_value());
+        $this->assertNull($overview->get_due_date_overview()->get_value());
         $this->assertNotNull($overview->get_actions_overview());
 
         // Learner who submitted and reviewed.
@@ -107,5 +102,17 @@ final class overview_test extends \advanced_testcase {
         $this->assertSame('notsubmitted', $items['mysubmission']->get_value());
         $this->assertSame(0, $items['myreviews']->get_value());
         $this->assertNull($overview->get_due_date_overview()->get_value());
+
+        // Scheduled mode shows the deadline of the current phase.
+        $timeclose = time() + DAYSECS;
+        $scheduled = $generator->get_plugin_generator('mod_peerreviewstudio')->create_instance([
+            'course' => $course->id,
+            'workflowmode' => 'scheduled',
+            'timeclose' => $timeclose,
+            'timereviewdue' => $timeclose + DAYSECS,
+        ]);
+        $overview = $this->get_overview($course, (int)$scheduled->cmid);
+        $this->assertSame('submission', $overview->get_extra_overview_items()['phase']->get_value());
+        $this->assertSame($timeclose, $overview->get_due_date_overview()->get_value());
     }
 }
